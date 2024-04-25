@@ -130,9 +130,6 @@ def simulate_pd_branching_fv2(t, theta, u0, options_sim):
     pass  # Implement your simulation function here
 
 
-
-
-
 def augment_cdf(x, x_a, y):
     pass  # Implement your cdf augmentation function here
 
