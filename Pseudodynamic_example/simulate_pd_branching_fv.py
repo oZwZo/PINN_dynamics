@@ -104,4 +104,3 @@ def simulate_pd_branching_fv_toy(tout, theta, kappa=[], data=None, options=None)
         sol.sy = sol.dydx @ sol.sx + sol.dydp
 
     return sol
-q
