@@ -1,5 +1,53 @@
 import numpy as np
 import torch
+from scipy.stats import gaussian_kde,entropy
+from scipy.integrate import trapz
+
+
+def boundary_density_at(D, t_b, x):
+    """
+    extract the cell density at time point `t_b`
+    Input
+    -------
+    D: the extracted data dictionary
+    t_b : the boundary time point
+    x : the grided cell state coordiante
+    
+    Return
+    -------
+    u0 : smoothed cell density over s and adjusted by pop size
+    """
+    
+    assert t_b in D['pop']['t'], "`t_b` is not the observed time point"
+    
+    # find the batch that belong to the tb time point
+    tp_index = [i for i, t in enumerate(D['ind']['tp']) if t==t_b]  
+    n_lib = len(tp_index) 
+    
+    n_grid = x.shape[0]
+    
+    ut = np.zeros((n_lib, n_grid))
+    Nt = np.zeros(n_lib)
+    
+    for i0 in range(n_lib):
+        
+        i_hist = tp_index[i0]
+        
+        # compute the density function based on the pdt coord
+        density = gaussian_kde(D['ind']['hist'][i_hist])
+        
+        # evaluate and normalize at grided time x
+        ut[i0, :] = density(x)
+        ut[i0, :] /= trapz(ut[i0, :], x)
+        Nt[i0] = len(D['ind']['hist'][i_hist]) # n cells
+
+    u_t = np.mean(ut, axis=0) * D['pop']['mean'][t_b]
+    # u_t = 0.5 * (u_t[:-1] + u_t[1:])
+
+    n_exp = 1  #TODO: change n_exp ?
+    
+    return u_t, Nt, n_exp
+
 
 def augment_cdf(x, x_a, y):
     """
@@ -31,43 +79,3 @@ def augment_cdf(x, x_a, y):
     return y_a
 
 
-def h_poly(t):
-    
-    # zero order, first order, second order, third order
-    tt = t[None, :]**torch.arange(4, device=t.device)[:, None]
-    A = torch.tensor([
-        [1, 0, -3, 2],
-        [0, 1, -2, 1],
-        [0, 0, 3, -2],
-        [0, 0, -1, 1]
-    ], dtype=t.dtype, device=t.device)
-    return A @ tt
-
-def spine_fun(hh, dx, y, idxs, m):
-    """
-    the main function doing the calculation
-    ----------
-    
-    """
-    cs = hh[0] * y[idxs] + hh[1] * m[idxs] * dx + hh[2] * y[idxs + 1] + hh[3] * m[idxs + 1] * dx
-    
-    return cs
-
-
-def interp(x, y, xs):
-    """
-    
-    """
-    # 
-    m = (y[1:] - y[:-1]) / (x[1:] - x[:-1])
-    m = torch.cat([m[[0]], (m[1:] + m[:-1]) / 2, m[[-1]]])
-    
-    #
-    idxs = torch.searchsorted(x[1:], xs)
-    dx = (x[idxs + 1] - x[idxs])
-    hh = h_poly((xs - x[idxs]) / dx)
-    
-    #
-    interp_value = spine_fun(hh, dx, y, idxs, m)
-    
-    return interp_value

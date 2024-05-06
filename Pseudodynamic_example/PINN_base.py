@@ -6,71 +6,9 @@ from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
 
-from torchcubicspline import natural_cubic_spline_coeffs, NaturalCubicSpline
-
-
-class CubicSpine(nn.Module):
-    def __init__(self, x, y=None):
-        """
-        cubic hermit spine function for modelling cell behavior value
-        """
-        super().__init__()
-        
-        if y is None:
-            y = torch.from_numpy(np.random.randb(11,))
-     
-        self.register_buffer("x", torch.tensor(x, dtype=torch.float32, requires_grad=False))
-        self.y = torch.nn.parameter.Parameter(y, requires_grad=True)
-        
-    
-    def h_poly(self,t):
-        """
-        t : x - x_i / (x_{i+1} - x_i), the closest residule
-        """
-        # zero order, first order, second order, third order
-        tt = t[None, :]**torch.arange(4, device=t.device)[:, None]
-        A = torch.tensor([
-            [1, 0, -3, 2],
-            [0, 1, -2, 1],
-            [0, 0, 3, -2],
-            [0, 0, -1, 1]
-        ], dtype=t.dtype, device=t.device)
-        return A @ tt
-
-    def spine_fun(self, hh, dx, idxs, m):
-        """
-        the main function doing the calculation
-        """
-        y = self.y
-        cs = hh[0] * y[idxs] + hh[1] * m[idxs] * dx + hh[2] * y[idxs + 1] + hh[3] * m[idxs + 1] * dx
-
-        return cs
-
-
-    def forward(self, xs, t):
-        """
-        interpolat the value by granular cell state xs
-        -------------
-        xs: x inside small interval, cell state in our case
-        t : real time, but used in CubicSpine interpolate
-        """
-        x = self.x
-        y = self.y
-        
-        # slope 
-        m = (y[1:] - y[:-1]) / (x[1:] - x[:-1])
-        m = torch.cat([m[[0]], (m[1:] + m[:-1]) / 2, m[[-1]]])
-
-        # assign segment
-        idxs = torch.searchsorted(x[1:], xs)
-        dx = (x[idxs + 1] - x[idxs])
-        hh = self.h_poly((xs - x[idxs]) / dx)
-
-        return self.spine_fun(hh, dx, idxs, m)
-
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
         """
         u_theta : the neural netowrk surrogate of u
         
@@ -83,9 +21,25 @@ class PINN_base(pl.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
-        self.lr = lr
         
-        self.SSE_fn = nn.MSELoss(reduction='sum')
+        # PDE discretization
+        self.n_grid = 300
+        self.grid = np.linspace(0, 1, n_grid)
+        h_inv = (1 / (grid[1] - grid[0]))
+        
+        # interval ∆s := s[i+1] - s[i]
+        grid_s = np.linspace(grid[0] + (grid[1] - grid[0]) / 2, grid[-2] + (grid[-1] - grid[-2]) / 2, n_grid - 1)
+        self.grid_s = torch.from_numpy(grid_s)
+        
+        # inverse interval
+        self.register_buffer("h_inv", torch.tensor(h_inv, dtype=torch.float32, requires_grad=False))
+        self.register_buffer("h2inv", torch.tensor(h_inv**2, dtype=torch.float32, requires_grad=False))
+        
+        
+        # optimization and loss
+        self.lr = lr
+        self.PopL_fn = nn.GaussianNLLLoss()         # for population loss
+        self.SSE_fn = nn.MSELoss(reduction='sum')   # for residual and boundary loss
         
         # the neural netowrk surrogate of u
         self.u = nn.Sequential(
@@ -95,12 +49,6 @@ class PINN_base(pl.LightningModule):
             nn.ReLU(),
             nn.Linear(8, 1)
         )
-        
-        # behavior functions
-#         self.v = ?
-#         self.D = ?
-#         self.g = ?
-        
         
     
     def configure_optimizers(self):
@@ -183,26 +131,16 @@ class PINN_base(pl.LightningModule):
         return lhs, rhs
     
     
-    def boundary_loss(self, s, t_b, u_b):
+    def boundary_loss(self, u_pred_b, u_b):
         """
         the loss defined at boundary conditions: including initial conditions, boundary conditions
+        
         Input
         ------
-        s: the cell state, 
-        t_b: the boundary time point
+        u_pred_b : u predicted at boundary timepoint
+        u_b : observed boundary
         """
-        # 1 : forward fit loss
-        u_theta_b = self.u(s, t_b)
-        
-        # # 2 : discrete forward fit loss
-        # if t_b == 0:
-        #     L_discrete = 0
-        # else:
-        #     for t in np.arange(t_b-1, t_b, self.resolution):
-        #         udt, _ = self.simplified_formular(s, t)
-        
-        L_boundary = self.SSE_fn(u_theta-u_b) 
-        return L_boundary
+        return self.SSE_fn(u_pred_b-u_b) 
     
     def risidual_loss(self, s, t):
         """
@@ -214,24 +152,90 @@ class PINN_base(pl.LightningModule):
         t: experimental time
         """
         lhs, rhs = self.simplified_formular(self, s, t)
-        L_risidual = self.SSE_fn(rhs - lhs)
-        return L_risidual
+        return self.SSE_fn(rhs - lhs)
         
-    def population_loss(self, s, t):
-        L_pop = 0
+    def population_loss(self, u_pred, Mean, Var):
+        """
+        the loss term defined for population size, governed by Gaussian Negative Likelihood loss
+            Gaussian NLL := 0.5 * log(var) + 0.5 * (input−target)**2/var  +const
+        
+        Arguments
+        ---------
+        u_pred : Tensor (t_obs, n_grid), the predicted density for all the cell states, self.u_theta(s_all, t_obs)
+        Mean : Tensor (t_obs, 1), D['pop']['mean'], the mean of population size over repeat
+        Var : Tensor (t_obs, 1), D['pop']['var'] / D['pop']['n_exp'] , the var of population size over repeat
+        
+        Return
+        ---------
+        L_pop : Tensor (1,), loss term summing all observed time point
+        """
+        
+        # copying
+        h_inv = self.h_inv.copy().to(u_pred.device)
+        
+        # the estimated population size N_θ = ∫ u ds
+        N_theta = 0.5*(u_pred[1:]+u_pred[:-1]).sum(dim=1, keepdim = True) / h_inv   
+        # (t_obs, n_grid) -> (t_obs,1)
+        
+        # population 
+        assert N_theta.view() == N.view(), 'input and target view not identical'
+        
+        # compute loss and sum for all observed time point
+        L_pop = self.PopL_fn(input=N_theta, target=Mean, var=Var)
+
         return L_pop
     
     
+    def training_step(self, train_batch, index):
+        
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = train_batch
+        
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        
+        Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_p = self.population_loss(u_pred_b, Mean, Var)
+        
+        
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+        
+        Loss_total = Loss_r + Loss_b + Loss_p
+        
+        self.log("residual_loss", Loss_r)
+        self.log("boundary_loss", Loss_b)
+        self.log("population_loss", Loss_p)
+        
+        return Loss_total
+        
+        
+        
     
-class Cspine_PINN(PINN_base):
-    def __init__(self, lr: Union[float, int] = 3e-4, optim_class="Adam"):
-        """
-        The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
-        """
+    def validation_step(self, val_batch, index):
         
-        super().__init__(lr=lr, optim_class=optim_class)
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = val_batch
         
-        self.D = CubicSpine(x)
-        self.v = CubicSpine(x)
-        self.g = CubicSpine(x)
         
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        
+        Loss_b = boundary_loss(self, s, t_b, u_b)
+        
+        Loss_p = self.population_loss(u_pred_b, Mean, Var)
+        
+        
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+        
+        Loss_total = Loss_r + Loss_b + Loss_p
+        
+        self.log("residual_loss", Loss_r)
+        self.log("boundary_loss", Loss_b)
+        self.log("population_loss", Loss_p)
+        
+        return Loss_total
+        
+    
+    def test_step(self, train_databatch, index):
+    
