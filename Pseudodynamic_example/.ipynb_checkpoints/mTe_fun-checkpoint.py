@@ -75,24 +75,37 @@ def mTe_fun(n):
     options['n_exp'] = 1
 
     # Compute augmentation of data ecdfs to x_combined
-    k1 = 0
+    D['csd_a'] = []
     for it in range(6):  # 1 + len(D['pop']['t'])
         x_combined = np.union1d(x[:-1], D['xsdt'][it])
-        D['csd_a'][k1] = augment_cdf(D['xsdt'][it], x_combined, D['csdt'][it])
-        options['x_combined'][it] = x_combined
-        k1 += 1
-
+        D['csd_a'].append(
+            augment_cdf(D['xsdt'][it], x_combined, D['csdt'][0].reshape(-1,1)))
+        options['x_combined'].append(x_combined)
+    
+    # in matlab
+    # D.csd_a{k1} = augment_cdf(D.xsdt{it},options.x_combined{k1},D.csdt{it});
+    
     # Compute matrices for augmentation of cdfs
+
+    ## original 
+    # for it in range(1, len(D['pop']['t'])):
+    #     options['Aug_matrix'][it] = np.zeros((n_grid - 1, n_grid - 1))
+    #     for ig in range(n_grid - 1):
+    #         e_i = np.zeros(n_grid - 1)
+    #         e_i[ig] = 1
+    #         options['Aug_matrix'][it][:, ig] = augment_cdf(options['grid'][:-1], x_combined, e_i) # ???
+    
+    ## debugged version
     for it in range(1, len(D['pop']['t'])):
-        options['Aug_matrix'][it] = np.zeros((n_grid - 1, n_grid - 1))
+        aug_M = []
+        
         for ig in range(n_grid - 1):
-            e_i = np.zeros(n_grid - 1)
+            e_i = np.zeros((n_grid - 1,1))
             e_i[ig] = 1
-            options['Aug_matrix'][it][:, ig] = augment_cdf(options['grid'][:-1], x_combined, e_i) # ???
-            
-            # in matlab
-            # D.csd_a{k1} = augment_cdf(D.xsdt{it},options.x_combined{k1},D.csdt{it});
-            
+            aug_M.append(  augment_cdf(x[:-1], options['x_combined'][it], e_i) ) # ???
+
+        options['Aug_matrix'].append(np.hstack(aug_M))
+                        
 
     # Log-likelihood function
     objectiveFunction = lambda theta: llPseudodynamicsFvKS(theta, modelfun, D, options)
