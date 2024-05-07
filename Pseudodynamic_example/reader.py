@@ -71,9 +71,9 @@ class Pdyn_ExtractDataset(Dataset):
         
         
         s_all = self.s.clone().detach()
-        t_b = torch.from_numpy(self.t_b), 
-        u_b = torch.from_numpy(self.u_b),
-        mean = torch.from_numpy(self.pop_mean),
+        t_b = torch.from_numpy(self.t_b)
+        u_b = torch.from_numpy(self.u_b)
+        mean = torch.from_numpy(self.pop_mean)
         var = torch.from_numpy(self.pop_var)
         
         return s_col, t_col, s_all, t_b, u_b, mean, var

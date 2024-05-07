@@ -8,7 +8,7 @@ from typing import Any, Union
 
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
         """
         u_theta : the neural netowrk surrogate of u
         
@@ -42,13 +42,7 @@ class PINN_base(pl.LightningModule):
         self.SSE_fn = nn.MSELoss(reduction='sum')   # for residual and boundary loss
         
         # the neural netowrk surrogate of u
-        self.u = nn.Sequential(
-            nn.Linear(2, 16),
-            nn.Sigmoid(),
-            nn.Linear(16, 8),
-            nn.ReLU(),
-            nn.Linear(8, 1)
-        )
+        self.u = u
         
     
     def configure_optimizers(self):
@@ -210,7 +204,6 @@ class PINN_base(pl.LightningModule):
         return Loss_total
         
         
-        
     
     def validation_step(self, val_batch, index):
         
@@ -220,8 +213,7 @@ class PINN_base(pl.LightningModule):
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
-        Loss_b = boundary_loss(self, s, t_b, u_b)
-        
+        Loss_b = self.boundary_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
         
         
@@ -237,5 +229,25 @@ class PINN_base(pl.LightningModule):
         return Loss_total
         
     
-    def test_step(self, train_databatch, index):
-    
+    def test_step(self, test_databatch, index):
+        
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = test_databatch
+        
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        
+        Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_p = self.population_loss(u_pred_b, Mean, Var)
+        
+        
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+        
+        Loss_total = Loss_r + Loss_b + Loss_p
+        
+        self.log("residual_loss", Loss_r)
+        self.log("boundary_loss", Loss_b)
+        self.log("population_loss", Loss_p)
+        
+        return Loss_total
