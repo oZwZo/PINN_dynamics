@@ -7,7 +7,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 class Pdyn_ExtractDataset(Dataset):
     
-    def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10):
+    def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
         """
         PINN-dynamics Dataset with the output of extracted data. The  
         
@@ -18,6 +18,11 @@ class Pdyn_ExtractDataset(Dataset):
         # load the result
         D = torch.load(Data_pt)
         
+        if log_transform:
+            mu = np.array(D['pop']['mean'])
+            D['pop']['mean'] = np.log(mu)
+            D['pop']['var'] = D['pop']['var']/ mu
+
         ###
         # set up params
         ### 
@@ -30,6 +35,7 @@ class Pdyn_ExtractDataset(Dataset):
         n_grid = n_grid
         s = np.linspace(0, 1, n_grid)
         self.s = torch.from_numpy(s)
+        h_inv = (1 / (s[1] - s[0]))
         
         ###
         # set up boundary conditions
@@ -43,7 +49,7 @@ class Pdyn_ExtractDataset(Dataset):
             # quantify the cell densitied at grided s
             u, N, n_exp = myfn.boundary_density_at(D, t, s)
                     
-            ub_ls.append(u)
+            ub_ls.append(u / h_inv)
             tb_ls.append(np.full_like(u, t))
             var_ls.append(D['pop']['var'][t] /n_exp)
         
@@ -66,15 +72,20 @@ class Pdyn_ExtractDataset(Dataset):
         """ 
         
         # random collocation points across the s and t domain
-        s_col = torch.Tensor(self.N_coll,1).uniform_(0, 1)
-        t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b))
+        s_col = torch.Tensor(self.N_coll,1).uniform_(0, 1).float()
+        t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b)).float()
+        # input_col = torch.cat([s_col, t_col], dim=1)
         
         
+        t_b = torch.from_numpy(self.t_b).float()
         s_all = self.s.clone().detach()
-        t_b = torch.from_numpy(self.t_b)
-        u_b = torch.from_numpy(self.u_b)
-        mean = torch.from_numpy(self.pop_mean)
-        var = torch.from_numpy(self.pop_var)
+        s_all = s_all.broadcast_to(t_b.shape).float()
+        # input_b = torch.stack([s_col, t_col], dim=2)
+
+        #
+        u_b = torch.from_numpy(self.u_b).float()
+        mean = torch.from_numpy(self.pop_mean).float()
+        var = torch.from_numpy(self.pop_var).float()
         
         return s_col, t_col, s_all, t_b, u_b, mean, var
         

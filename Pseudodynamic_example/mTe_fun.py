@@ -7,7 +7,7 @@ from scipy.optimize import minimize
 
 # _ our own implementation
 from functions import augment_cdf
-from loss import llPseudodynamicsFvKS 
+from llPseudodynamics import llPseudodynamicsFvKS 
 
 
 def mTe_fun(n):
@@ -20,7 +20,7 @@ def mTe_fun(n):
 
     # Data
     ic = np.nan
-    D = torch.load('dataExample.pt')
+    D = torch.load('/home/wergillius/Project/PINN_dynamics/Pseudodynamic_example/dataExample.pt')
     
 
     # Determine regularization alpha depending on n
@@ -42,9 +42,9 @@ def mTe_fun(n):
                      'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9',
                      'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9'],
             'number': 27,
-            'min': [-10.3616] * np.ones(9) + [-11.5129] * np.ones(9) + [-6] * np.ones(9),
-            'max': [0] * np.ones(9) + [0] * np.ones(9) + [5] * np.ones(9),
-            'guess': [-6.7] * np.ones(9) + [-2] * np.ones(9) + [-4] * 2 + [-10] + [-12] + [1.2] * np.ones(9)
+            'min': [-10.3616] * 9 + [-11.5129] * 9 + [-6] * 9 ,
+            'max': [0] * 9 + [0] * 9 + [5] * 9,
+            'guess': [-6.7] *9 + [-2] * 5 + [-4] * 2 + [-10] + [-12] + [1.2] * 9
         }
         modelfun = simulate_pd_fv
     elif model == 'branching_fv':
@@ -117,7 +117,7 @@ def mTe_fun(n):
         'comp_type': 'sequential',
         'mode': 'silent',
         'proposal': 'uniform',
-        'localOptimizerOptions': {
+        'localOptimizerOptions': {
             'Display': 'off',
             'Gradobj': 'on',
             'MaxIter': 6000,
@@ -149,3 +149,7 @@ def augment_cdf(x, x_a, y):
 
 def getMultiStarts(parameters, objectiveFunction, optionsMultistart):
     pass  # Implement your multi-start local optimization function here
+
+
+if __name__ == '__main__':
+    mTe_fun(200)

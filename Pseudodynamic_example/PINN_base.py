@@ -24,7 +24,8 @@ class PINN_base(pl.LightningModule):
         
         # PDE discretization
         self.n_grid = 300
-        self.grid = np.linspace(0, 1, n_grid)
+        grid = np.linspace(0, 1, n_grid)
+        self.grid = grid
         h_inv = (1 / (grid[1] - grid[0]))
         
         # interval ∆s := s[i+1] - s[i]
@@ -38,6 +39,7 @@ class PINN_base(pl.LightningModule):
         
         # optimization and loss
         self.lr = lr
+        self.optim_class = optim_class
         self.PopL_fn = nn.GaussianNLLLoss()         # for population loss
         self.SSE_fn = nn.MSELoss(reduction='sum')   # for residual and boundary loss
         
@@ -56,13 +58,13 @@ class PINN_base(pl.LightningModule):
             # i.e. Adam              
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
     
-    def fowrard(self, s, t):
+    def fowrard(self, s, t) -> torch.Tensor:
         """
         use the neural network to evaluate the density 
         """
         return self.u(s,t)
     
-    def formular(self, s, t):
+    def formular(self, s, t) -> tuple:
         """
         Apply torch's auto grad to compute the 
         
@@ -77,7 +79,7 @@ class PINN_base(pl.LightningModule):
         g = self.g(s,t)
         
         # left : ∂u/∂t
-        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+        lhs = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
         
         
         # the first order deviritives of density u to time : ∂u/∂s
@@ -96,7 +98,7 @@ class PINN_base(pl.LightningModule):
         
         return lhs, rhs
     
-    def simplified_formular(self, s, t):
+    def simplified_formular(self, s, t) -> tuple:
         """
         Apply torch's auto grad to compute the 
         
@@ -111,7 +113,7 @@ class PINN_base(pl.LightningModule):
         g = self.g(s,t)
         
         # left : ∂u/∂t
-        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+        lhs = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
         
         # the first order deviritives of density u to cell state : ∂u/∂s
         duds = torch.autograd.grad(u.sum(), s, create_graph=True)[0]
@@ -123,9 +125,15 @@ class PINN_base(pl.LightningModule):
         rhs = torch.mul(D, u_ss) + torch.mul(v, duds) + torch.mul(g, u)
         
         return lhs, rhs
+
+    # Area statistics
+    def Area_loss(self, u_pred_b, u_b) -> torch.Tensor:
+        # check `Pseudodynamic_example/llPseudodynamics.py:49`
+        raise NotImplementedError
+
     
     
-    def boundary_loss(self, u_pred_b, u_b):
+    def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor:
         """
         the loss defined at boundary conditions: including initial conditions, boundary conditions
         
@@ -134,9 +142,9 @@ class PINN_base(pl.LightningModule):
         u_pred_b : u predicted at boundary timepoint
         u_b : observed boundary
         """
-        return self.SSE_fn(u_pred_b-u_b) 
+        return self.SSE_fn(u_pred_b, u_b) 
     
-    def risidual_loss(self, s, t):
+    def risidual_loss(self, s, t) -> torch.Tensor:
         """
         calculate the loss for collocation points, this loss inject the pde into the neural network
         
@@ -145,10 +153,10 @@ class PINN_base(pl.LightningModule):
         s: the cell state, 
         t: experimental time
         """
-        lhs, rhs = self.simplified_formular(self, s, t)
-        return self.SSE_fn(rhs - lhs)
+        lhs, rhs = self.simplified_formular(s, t)
+        return self.SSE_fn(rhs, lhs)
         
-    def population_loss(self, u_pred, Mean, Var):
+    def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
         the loss term defined for population size, governed by Gaussian Negative Likelihood loss
             Gaussian NLL := 0.5 * log(var) + 0.5 * (input−target)**2/var  +const
@@ -165,14 +173,14 @@ class PINN_base(pl.LightningModule):
         """
         
         # copying
-        h_inv = self.h_inv.copy().to(u_pred.device)
+        assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
         
         # the estimated population size N_θ = ∫ u ds
-        N_theta = 0.5*(u_pred[1:]+u_pred[:-1]).sum(dim=1, keepdim = True) / h_inv   
+        N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
         # (t_obs, n_grid) -> (t_obs,1)
         
         # population 
-        assert N_theta.view() == N.view(), 'input and target view not identical'
+        assert N_theta.shape == Mean.shape, 'input and target view not identical'
         
         # compute loss and sum for all observed time point
         L_pop = self.PopL_fn(input=N_theta, target=Mean, var=Var)
@@ -184,6 +192,8 @@ class PINN_base(pl.LightningModule):
         
         s_col, t_col, s_all, t_b, u_b, Mean, Var = train_batch
         
+        t_b = t_b.squeeze(0)
+        s_all = s_all.squeeze(0)
         
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
@@ -200,6 +210,7 @@ class PINN_base(pl.LightningModule):
         self.log("residual_loss", Loss_r)
         self.log("boundary_loss", Loss_b)
         self.log("population_loss", Loss_p)
+        self.log("total_loss", Loss_total)
         
         return Loss_total
         
@@ -209,12 +220,14 @@ class PINN_base(pl.LightningModule):
         
         s_col, t_col, s_all, t_b, u_b, Mean, Var = val_batch
         
-        
+        t_b = torch.einsum('ijk->jki', t_b)      # change dimension
+        s_all = torch.einsum('ijk->jki', s_all)  # (1, T, n_grid) -> (T, n_grid, 1)
+
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
-        Loss_b = self.boundary_loss(u_pred_b, u_b)
-        Loss_p = self.population_loss(u_pred_b, Mean, Var)
+        Loss_b = self.boundary_loss(u_pred_b, u_b.squeeze())
+        Loss_p = self.population_loss(u_pred_b, Mean.T, Var.T)
         
         
         # residual loss defied on collocation points
@@ -225,7 +238,8 @@ class PINN_base(pl.LightningModule):
         self.log("residual_loss", Loss_r)
         self.log("boundary_loss", Loss_b)
         self.log("population_loss", Loss_p)
-        
+        self.log("total_loss", Loss_total)
+
         return Loss_total
         
     

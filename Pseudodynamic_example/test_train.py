@@ -1,12 +1,13 @@
 import os
-import torch 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+import torch 
+from torch import nn
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader
 
 from reader import Pdyn_ExtractDataset
 import PINNs
-import funtions
 
 
 
@@ -15,12 +16,12 @@ import funtions
 #     read data     #
 ###               ###
 
-pt_path = 'dataExample.pt'
-train_DS = reader.Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=300, n_repeat=10)
-val_DS= reader.Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=600, n_repeat=1)
+pt_path = '/home/wergillius/Project/PINN_dynamics/Pseudodynamic_example/dataExample.pt'
+train_DS = Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=300, n_repeat=10)
+val_DS= Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=600, n_repeat=1)
 
 train_DL = DataLoader(train_DS, batch_size=1, num_workers=4)
-val_Loader = DataLoader(val_DS, batch_size=1, num_workers=4)
+val_DL = DataLoader(val_DS, batch_size=1, num_workers=4)
 
 
 
@@ -29,12 +30,7 @@ val_Loader = DataLoader(val_DS, batch_size=1, num_workers=4)
 ###                  ###
 
 # define neural network surrogate
-u_theta = nn.Sequential(nn.Linear(2,32),
-                        nn.Tanh(),
-                        nn.Linear(32, 32),
-                        nn.Tanh(),
-                        nn.Linear(32, 1)
-                       )
+u_theta = PINNs.MLP_surrogate(channels = [2, 32, 32, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
 Pdyn_model = PINNs.Cspline_PINN(u=u_theta, n_knot=11)
@@ -63,6 +59,6 @@ trainer = pl.Trainer(auto_lr_find=True,
 #                                 callbacks.EarlyStopping(monitor="val_cre", mode="min", patience=20),]
     
 
-model.train()
+Pdyn_model.train()
 trainer.fit(Pdyn_model, train_DL, val_dataloaders=val_DL)
         
