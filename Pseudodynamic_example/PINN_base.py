@@ -187,16 +187,31 @@ class PINN_base(pl.LightningModule):
 
         return L_pop
     
+    def get_data(self, data_batch, requires_grad=True):
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = data_batch
+
+        s_col = s_col.squeeze().float()
+        t_col = t_col.squeeze().float()
+
+        t_b = torch.einsum('ijk->jki', t_b).float()      # change dimension
+        s_all = torch.einsum('ijk->jki', s_all).float()  # (1, T, n_grid) -> (T, n_grid, 1)
+
+        # reguires_grad
+        if requires_grad:
+            s_col.requires_grad = True
+            t_col.requires_grad = True
+            s_all.requires_grad = True
+            t_b.requires_grad = True
+
+        Mean = Mean.T.float()
+        Var = Var.T.float()
+
+        return s_col, t_col, s_all, t_b, u_b, Mean, Var
     
     def training_step(self, train_batch, index):
         
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = train_batch
-        s_col = s_col.squeeze()
-        t_col = t_col.squeeze()
-
-        t_b = torch.einsum('ijk->jki', t_b)      # change dimension
-        s_all = torch.einsum('ijk->jki', s_all)  # (1, T, n_grid) -> (T, n_grid, 1)
-
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(train_batch)
+        
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
@@ -220,18 +235,13 @@ class PINN_base(pl.LightningModule):
     
     def validation_step(self, val_batch, index):
         
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = val_batch
-        s_col = s_col.squeeze()
-        t_col = t_col.squeeze()
-        
-        t_b = torch.einsum('ijk->jki', t_b)      # change dimension
-        s_all = torch.einsum('ijk->jki', s_all)  # (1, T, n_grid) -> (T, n_grid, 1)
-
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(val_batch, requires_grad=False)
+    
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b.squeeze())
-        Loss_p = self.population_loss(u_pred_b, Mean.T, Var.T)
+        Loss_p = self.population_loss(u_pred_b, Mean, Var)
         
         
         # residual loss defied on collocation points
@@ -250,13 +260,8 @@ class PINN_base(pl.LightningModule):
     
     def test_step(self, test_databatch, index):
         
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = test_databatch
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(test_databatch)
         
-        s_col = s_col.squeeze()
-        t_col = t_col.squeeze()
-        
-        t_b = torch.einsum('ijk->jki', t_b)      # change dimension
-        s_all = torch.einsum('ijk->jki', s_all)  # (1, T, n_grid) -> (T, n_grid, 1)
         
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
