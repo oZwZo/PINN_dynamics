@@ -78,6 +78,8 @@ class CubicSpline(nn.Module):
         """
         t : x - x_i / (x_{i+1} - x_i), the closest residule
         """
+
+        t = t.squeeze()
         
         A = torch.tensor([
             [1, 0, -3, 2],
@@ -93,7 +95,8 @@ class CubicSpline(nn.Module):
         elif len(t.shape) == 2:
             tt = t[:, None, :]**torch.arange(4, device=t.device)[:, None]
             hh = torch.einsum("ij, bjk -> bik", A, tt)
-             
+        else:
+            raise ValueError()
         return hh
 
     
