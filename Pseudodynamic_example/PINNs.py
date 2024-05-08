@@ -64,7 +64,7 @@ class CubicSpline(nn.Module):
             x = np.linspace(0,1,n_knot)
         
         if y is None:
-            y = torch.from_numpy(np.random.randn(n_knot,))
+            y = torch.from_numpy(np.random.randn(n_knot,)).float()
      
         self.register_buffer("x", torch.tensor(x, dtype=torch.float32, requires_grad=False))
         self.y = torch.nn.parameter.Parameter(y, requires_grad=True)
@@ -99,16 +99,6 @@ class CubicSpline(nn.Module):
             raise ValueError()
         return hh
 
-    
-    def spline_fun(self, hh, dx, idxs, m) -> torch.Tensor:
-        """
-        the main function doing the calculation
-        """
-        y = self.y
-        cs = hh[0] * y[idxs] + hh[1] * m[idxs] * dx + hh[2] * y[idxs + 1] + hh[3] * m[idxs + 1] * dx
-
-        return cs
-
 
     def forward(self, xs, t) -> torch.Tensor:
         """
@@ -117,19 +107,24 @@ class CubicSpline(nn.Module):
         xs: x inside small interval, cell state in our case
         t : real time, but used in CubicSpine interpolate
         """
-        x = self.x
-        y = self.y
+        
         
         # slope 
-        m = (y[1:] - y[:-1]) / (x[1:] - x[:-1])
+        m = (self.y[1:] - self.y[:-1]) / (self.x[1:] - self.x[:-1])
         m = torch.cat([m[[0]], (m[1:] + m[:-1]) / 2, m[[-1]]])
 
         # assign segment
-        idxs = torch.searchsorted(x[1:], xs)
-        dx = (x[idxs + 1] - x[idxs])
-        hh = self.h_poly((xs - x[idxs]) / dx)
+        idxs = torch.searchsorted(self.x[1:], xs)
+        dx = (self.x[idxs + 1] - self.x[idxs])
+        hh = self.h_poly((xs - self.x[idxs]) / dx)
 
-        return self.spline_fun(hh, dx, idxs, m)
+        # the main function doing the calculation
+        cs = hh[0] * self.y[idxs] +\
+             hh[1] * m[idxs] * dx +\
+             hh[2] * self.y[idxs + 1] +\
+             hh[3] * m[idxs + 1] * dx
+
+        return cs
     
     
 class Cspline_PINN(PINN_base):

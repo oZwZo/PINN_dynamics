@@ -57,6 +57,8 @@ class PINN_base(pl.LightningModule):
         else:
             # i.e. Adam              
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        
+        return optimizer
     
     def fowrard(self, s, t) -> torch.Tensor:
         """
@@ -224,10 +226,10 @@ class PINN_base(pl.LightningModule):
         
         Loss_total = Loss_r + Loss_b + Loss_p
         
-        self.log("residual_loss", Loss_r)
-        self.log("boundary_loss", Loss_b)
-        self.log("population_loss", Loss_p)
-        self.log("total_loss", Loss_total)
+        self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
         
         return Loss_total
         
@@ -250,10 +252,10 @@ class PINN_base(pl.LightningModule):
         
         Loss_total = Loss_r + Loss_b + Loss_p
         
-        self.log("residual_loss", Loss_r)
-        self.log("boundary_loss", Loss_b)
-        self.log("population_loss", Loss_p)
-        self.log("total_loss", Loss_total)
+        self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
 
         return Loss_total
         

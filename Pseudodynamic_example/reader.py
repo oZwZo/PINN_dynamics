@@ -74,18 +74,11 @@ class Pdyn_ExtractDataset(Dataset):
         # random collocation points across the s and t domain
         s_col = torch.Tensor(self.N_coll,1).uniform_(0, 1).float()
         t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b)).float()
-        # s_col.requires_grad = True
-        # t_col.requires_grad = True
-        # input_col = torch.cat([s_col, t_col], dim=1)
         
         
         t_b = torch.from_numpy(self.t_b).float()
         s_all = self.s.clone().detach()
         s_all = s_all.broadcast_to(t_b.shape).float()
-
-        # t_b.requires_grad = True
-        # s_all.requires_grad = True
-        # input_b = torch.stack([s_col, t_col], dim=2)
 
         #
         u_b = torch.from_numpy(self.u_b).float()
