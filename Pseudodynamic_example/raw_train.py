@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from pytorch_lightning import callbacks 
 from pytorch_lightning import loggers as pl_loggers
 
-import PINNs
+import Pseudodynamic_example.models as models
 from reader import Pdyn_ExtractDataset
 
 
@@ -32,10 +32,10 @@ train_DL = DataLoader(train_DS, batch_size=1, num_workers=4)
 ###                  ###
 
 # define neural network surrogate
-u_theta = PINNs.MLP_surrogate(channels = [2, 32, 32, 1], activation_fn='Tanh')
+u_theta = models.MLP_surrogate(channels = [2, 32, 32, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
-Pdyn_model = PINNs.Cspline_PINN(u=u_theta, n_knot=11, lr=10)
+Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=10)
 
 
 
