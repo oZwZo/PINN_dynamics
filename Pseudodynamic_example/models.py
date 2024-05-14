@@ -6,7 +6,6 @@ from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
 from PINN_base import PINN_base
-from torchcubicspline import natural_cubic_spline_coeffs, NaturalCubicSpline
 
 class MLP_surrogate(nn.Module):
     
