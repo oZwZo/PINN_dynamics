@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from pytorch_lightning import callbacks 
 from pytorch_lightning import loggers as pl_loggers
 
-import Pseudodynamic_example.models as models
+import models as models
 from reader import Pdyn_ExtractDataset
 
 
@@ -20,7 +20,15 @@ from reader import Pdyn_ExtractDataset
 #     read data     #
 ###               ###
 
-pt_path = '/home/wergillius/Project/PINN_dynamics/Pseudodynamic_example/dataExample.pt'
+path = os.path.abspath(".")
+pt_path = os.path.join(path, 'dataExample.pt')
+
+if not os.path.exists(pt_path):
+    main_path = path
+    pt_path = os.path.join(path, 'Pseudodynamic_example/dataExample.pt')
+else:
+    main_path = os.path.dirname(path)
+
 train_DS = Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=300, n_repeat=10)
 val_DS= Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=600, n_repeat=1)
 
@@ -37,7 +45,7 @@ val_DL = DataLoader(val_DS, batch_size=1, num_workers=4)
 u_theta = models.MLP_surrogate(channels = [2, 32, 32, 32, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
-Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-4)
+Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-3)
 
 
 
@@ -47,7 +55,7 @@ Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-4)
 
 device = 'gpu' if torch.cuda.is_available() else 'cpu'
 gpu_device = 0
-pth_save_path = "/home/wergillius/Project/PINN_dynamics/logs/Cspline_PINN/"
+pth_save_path = "../logs/Cspline_PINN/"
 tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 
 trainer = pl.Trainer(auto_lr_find=True,
@@ -56,7 +64,7 @@ trainer = pl.Trainer(auto_lr_find=True,
                      default_root_dir=pth_save_path,
                      logger=tb_logger,
                      devices = [gpu_device],
-                     max_epochs=1000,
+                     max_epochs=300,
                      callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                   monitor="total_loss", mode="min", save_top_k=2)]
                      )
@@ -69,50 +77,3 @@ trainer = pl.Trainer(auto_lr_find=True,
 
 Pdyn_model.train()
 trainer.fit(Pdyn_model, train_DL)
-        
-####
-##  give up using trainer
-##  Training and Fitting
-####
-
-# iterations = 20000
-# previous_validation_loss = 99999
-
-# for epoch in range(iterations):
-    
-#     optimizer.zero_grad() # to maket the gradients zero
-    
-#     # Loss based on boundary conditions
-#     pt_x_bc = Variable(torch.from_numpy(x_bc).float(), requires_grad=False).to(device)
-#     pt_u_bc1 = Variable(torch.from_numpy(y_bc).float(), requires_grad=False).to(device)
-#     pt_t_bc1 = Variable(torch.from_numpy(t_bc0).float(), requires_grad=False).to(device)
-
-#     pt_t_bc0 = Variable(torch.from_numpy(t_bc0).float(), requires_grad=False).to(device)
-#     pt_u_bc0 = Variable(torch.from_numpy(u_bc).float(), requires_grad=False).to(device)
-    
-#     net_bc_out0 = u_theta(pt_x_bc, pt_t_bc0) 
-#     mse_b0 = mse_cost_function(net_bc_out0, pt_u_bc0)    # loss B
-
-#     net_bc_out1 = u_theta(pt_x_bc, pt_t_bc1) 
-#     mse_b1 = mse_cost_function(net_bc_out1, pt_u_bc1)    # loss B
-    
-#     # Loss based on PDE
-#     x_collocation = np.random.uniform(low=0.0, high=2.0, size=(500,1))
-#     t_collocation = np.random.uniform(low=0.0, high=1.0, size=(500,1))
-#     all_zeros = np.zeros((500,1))
-    
-#     pt_x_collocation = Variable(torch.from_numpy(x_collocation).float(), requires_grad=True).to(device)
-#     pt_t_collocation = Variable(torch.from_numpy(t_collocation).float(), requires_grad=True).to(device)
-#     pt_all_zeros = Variable(torch.from_numpy(all_zeros).float(), requires_grad=False).to(device)
-    
-#     f_out = f(pt_x_collocation, pt_t_collocation, u_theta) # output of collocation points
-#     mse_f = mse_cost_function(f_out, pt_all_zeros)
-    
-#     # Combining the loss functions
-#     loss = mse_b0 + mse_b1 + mse_f
-    
-#     loss.backward()
-#     optimizer.step()
-    
-#     with torch.autograd.no_grad():
-#         print(epoch, "Training Loss:", loss.data)
