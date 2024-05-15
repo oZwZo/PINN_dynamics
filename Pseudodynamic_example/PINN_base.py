@@ -133,6 +133,11 @@ class PINN_base(pl.LightningModule):
         # check `Pseudodynamic_example/llPseudodynamics.py:49`
         raise NotImplementedError
 
+    def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:
+        
+        p = u / N.reshape(-1, 1) * (1 / (n_grid - 1))
+        
+        return 
     
     
     def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor:
