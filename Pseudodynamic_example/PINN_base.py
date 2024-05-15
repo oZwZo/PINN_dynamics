@@ -283,28 +283,23 @@ class PINN_base(pl.LightningModule):
         return Loss_total
         
     
-    def test_step(self, test_databatch, index):
-        
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(test_databatch)
-        
-        
-        # predict at boundary time poits
+    def predict_boundary(self,batch):
+        """
+        predicts density u and cell number N for the observed time points
+        """
+        def predict_from(batch, log_model):
+
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch, False)
+
+        grid_s = np.linspace(0,1,s_all.shape[1])
+
+        # predict
         u_pred_b = self.u(s_all, t_b)
-        
-        Loss_b = self.boundary_loss(u_pred_b, u_b)
-        Loss_k = self.distribution_loss(u_pred_b, u_b)
-        Loss_p = self.population_loss(u_pred_b, Mean, Var)
-        
-        
-        # residual loss defied on collocation points
-        Loss_r = self.risidual_loss(s_col, t_col)
-        
-        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
-        
-        self.log("residual_loss", Loss_r)
-        self.log("distribution_loss", Loss_k, on_epoch=True)
-        self.log("boundary_loss", Loss_b, on_epoch=True)
-        self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
-        
-        return Loss_total
+
+        u_pred_b = u_pred_b.detach().numpy()
+        u_b = u_b.detach().numpy()[0]
+        N_theta = 0.5*(u_pred_b[:,1:]+u_pred_b[:,:-1]).sum(axis=1)
+        Mean = Mean.detach().numpy().flatten()
+        Var = Var.detach().numpy().flatten()
+
+        return u_pred_b, N_theta
