@@ -1,0 +1,13 @@
+logs/
+logs/*
+Pseudodynamic_example/.ipynb_checkpoints/*
+simulate_plot/.ipynb_checkpoints/*
+Pseudodynamic_example/__pycache__/functions.cpython-38.pyc
+Pseudodynamic_example/__pycache__/models.cpython-38.pyc
+
+*checkpoints.py
+*/*checkpoints.py
+*.pyc
+Pseudodynamic_example/.ipynb_checkpoints/functions-checkpoint.py
+Pseudodynamic_example/.ipynb_checkpoints/functions-checkpoint.py
+.vscode/*
