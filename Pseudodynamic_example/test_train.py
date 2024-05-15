@@ -47,6 +47,9 @@ u_theta = models.MLP_surrogate(channels = [2, 32, 32, 32, 1], activation_fn='Tan
 # pseudo dynamics model
 Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-3)
 
+# pretrained
+# ckpt_path = os.path.join(main_path, "logs/Cspline_PINN/lightning_logs/version_3/checkpoints/epoch=297-total_loss=10.55338860.ckpt")
+# Pdyn_model = models.Cspline_PINN.load_from_checkpoint(ckpt_path)
 
 
 ###                     ###
@@ -54,8 +57,8 @@ Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-3)
 ###                     ###
 
 device = 'gpu' if torch.cuda.is_available() else 'cpu'
-gpu_device = 0
-pth_save_path = "../logs/Cspline_PINN/"
+gpu_device = 2
+pth_save_path = os.path.join(main_path, "logs/Cspline_PINN/")
 tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 
 trainer = pl.Trainer(auto_lr_find=True,

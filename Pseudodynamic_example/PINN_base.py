@@ -40,8 +40,9 @@ class PINN_base(pl.LightningModule):
         # optimization and loss
         self.lr = lr
         self.optim_class = optim_class
-        self.PopL_fn = nn.GaussianNLLLoss()         # for population loss
-        self.SSE_fn = nn.MSELoss(reduction='sum')   # for residual and boundary loss
+        self.PopL_fn = nn.GaussianNLLLoss()                     # for population loss
+        self.SSE_fn = nn.MSELoss(reduction='sum')               # for residual and boundary loss
+        self.KLD_fn = torch.nn.KLDivLoss(reduction="none") # for distribution loss
         
         # the neural netowrk surrogate of u
         self.u = u
@@ -134,10 +135,22 @@ class PINN_base(pl.LightningModule):
         raise NotImplementedError
 
     def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:
+        """
+        the loss defined as the kl divergence of the distribution, used to keep the shape
+        """
+        # from density to probability
+        u_b = u_b + 1e-17
+        p_b = (u_b)/ u_b.sum(axis=1,keepdim=True)
         
-        p = u / N.reshape(-1, 1) * (1 / (n_grid - 1))
+        # the probability of prediction : non-negative
+        u_pred_b = u_pred_b - u_pred_b.min(axis=1)[0].view(-1,1) + 1e-17
+        p_pred_b = u_pred_b / u_pred_b.sum(axis=1,keepdim=True)
         
-        return 
+        # prediction should be a distribution in the log space
+        #.         y pred  ,  y_true
+        L_kld = self.KLD_fn(p_pred_b.squeeze().log(), p_b.squeeze())
+        
+        return L_kld.mean(axis=1).sum()
     
     
     def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor:
@@ -216,22 +229,26 @@ class PINN_base(pl.LightningModule):
         return s_col, t_col, s_all, t_b, u_b, Mean, Var
     
     def training_step(self, train_batch, index):
-        
+        """
+        get the data and compute the loss
+        """
         s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(train_batch)
         
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_k = self.distribution_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
         
         
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
         
-        Loss_total = Loss_r + Loss_b + Loss_p
+        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
         
         self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("distribution_loss", Loss_k, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
@@ -248,16 +265,17 @@ class PINN_base(pl.LightningModule):
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b.squeeze())
+        Loss_k = self.distribution_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
-        
-        
+    
         # residual loss defied on collocation points
         # Loss_r = self.risidual_loss(s_col, t_col)
-        Loss_r = 0
+        Loss_r = 20
         
-        Loss_total = Loss_r + Loss_b + Loss_p
+        Loss_total = Loss_k + Loss_b + Loss_p
         
         self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("distribution_loss", Loss_k, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
@@ -274,16 +292,19 @@ class PINN_base(pl.LightningModule):
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_k = self.distribution_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
         
         
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
         
-        Loss_total = Loss_r + Loss_b + Loss_p
+        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
         
         self.log("residual_loss", Loss_r)
-        self.log("boundary_loss", Loss_b)
-        self.log("population_loss", Loss_p)
+        self.log("distribution_loss", Loss_k, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
         
         return Loss_total
