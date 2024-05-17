@@ -55,23 +55,33 @@ def behavior_curves(log_model, n_grid=300):
 
 def density_by_time(u_b, u_pred_b, train_DS):
 
-    fig = plt.figure(figsize=(4,3), dpi=400)
-
-    for i,t in enumerate(train_DS.T_b):
-        plt.plot(np.linspace(0,1,300), u_pred_b[t], '--', label='day %s'%t)
-
-    plt.title('prediction')
-
-    plt.xlabel('cell state')
-    plt.ylabel('density')
+    fig, axs = plt.subplots(1,2,figsize=(8,3), dpi=300)
+    cell_state = np.linspace(0,1,u_b.shape[1])
+    
+    if isinstance(u_b, torch.Tensor):
+        u_b_ay = u_b.detach().numpy()
+    if isinstance(u_pred_b, torch.Tensor):
+        u_pred_b = u_pred_b.detach().numpy()
+        
+    for i in range(6):
+        axs[0].plot(cell_state, u_b[i], label=i)
+        axs[1].plot(cell_state, u_pred_b[i], '--', label=i)
+    
+    axs[0].set_title('observation')
+    axs[1].set_title('prediction')
+    
+    axs[0].set_xlabel('cell state')
+    axs[1].set_xlabel('cell state')
+    axs[0].set_ylabel('density')
+    
     plt.legend(ncol=2)
     fig, axs = plt.subplots(len(train_DS.T_b)//2, 2, figsize=(6,6), sharex=True, 
                         gridspec_kw={'hspace':0.4},  dpi=300)
     axs = axs.flatten()
 
     for i,t in enumerate(train_DS.T_b):
-        axs[i].plot(np.linspace(0,1,300), u_b[t],  label='observed')
-        axs[i].plot(np.linspace(0,1,300), u_pred_b[t], '--', label='pred')
+        axs[i].plot(cell_state, u_b[t],  label='observed')
+        axs[i].plot(cell_state, u_pred_b[t], '--', label='pred')
         axs[i].set_title('day %s'%t)
         if i%2 ==0 :
             axs[i].set_ylabel("density")

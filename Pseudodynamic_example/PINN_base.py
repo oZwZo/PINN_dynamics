@@ -245,7 +245,8 @@ class PINN_base(pl.LightningModule):
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
         
-        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
+        # Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
+        Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
         
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("distribution_loss", Loss_k, on_epoch=True)
@@ -254,8 +255,6 @@ class PINN_base(pl.LightningModule):
         self.log("total_loss", Loss_total, on_epoch=True)
         
         return Loss_total
-        
-        
     
     def validation_step(self, val_batch, index):
         
@@ -281,13 +280,11 @@ class PINN_base(pl.LightningModule):
         self.log("total_loss", Loss_total, on_epoch=True)
 
         return Loss_total
-        
     
     def predict_boundary(self,batch):
         """
         predicts density u and cell number N for the observed time points
         """
-        def predict_from(batch, log_model):
 
         s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch, False)
 
