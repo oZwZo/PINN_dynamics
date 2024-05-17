@@ -9,7 +9,8 @@ class Pdyn_ExtractDataset(Dataset):
     
     def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
         """
-        PINN-dynamics Dataset with the output of extracted data. The  
+        PINN-dynamics Dataset using the pre-extracted data.   
+        This dataset returns full cell state (0-1) for each mini-batch
         
         Augment
         --------
@@ -86,7 +87,48 @@ class Pdyn_ExtractDataset(Dataset):
         var = torch.from_numpy(self.pop_var).float()
         
         return s_col, t_col, s_all, t_b, u_b, mean, var
+
+
+class Random_ExtractDataset(Pdyn_ExtractDataset):
+
+    def __init__(self, Data_pt, n_time=30, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
+        """
+        Based on the pre-extracted dataset, 
+
+        Augments
+        -----------
+        Data_pt :
+        n_time : the cell state to give to the 
+
+        """
+        super().__init__(Data_pt, n_grid=n_grid, collocation_points=collocation_points, n_repeat=n_repeat, log_transform=log_transform)       
+        self.n_time = n_time
+    
+    def __len__(self):
+        # repeat sampling for 10 times
+        return self.n_grid / self.n_time * 10 
+
+    def __getitem__(self, i):
+        """
+        there is no mini-batch, each item returns the full collocation points
+        """ 
         
+        # random collocation points across the s and t domain
+        s_col = torch.Tensor(self.N_coll,1).uniform_(0, 1).float()
+        t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b)).float()
+        
+        
+        t_b = torch.from_numpy(self.t_b).float()
+        s_all = self.s.clone().detach()
+        s_all = s_all.broadcast_to(t_b.shape).float()
+
+        #
+        u_b = torch.from_numpy(self.u_b).float()
+        mean = torch.from_numpy(self.pop_mean).float()
+        var = torch.from_numpy(self.pop_var).float()
+        
+        return s_col, t_col, s_all, t_b, u_b, mean, var
+
         
 #TODO: complete AnnDataset
 class Pdyn_AnnDataset(Dataset):

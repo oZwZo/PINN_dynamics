@@ -1,4 +1,4 @@
-import os
+import os, argparse
 import numpy as np
 import pandas as pd
 import torch 
@@ -13,12 +13,17 @@ import models as models
 from reader import Pdyn_ExtractDataset
 
 
+if __name__ == '__name__':
+    argparser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
+    argparser.add_argument("-M", "--model", type='str', required=False, default="CubicSpline", help=' the model class (defined in models.py)')
+    argparser.add_argument("-W", "--pretrained", type='str', required=False, default=None, help='the path of the pretrained weights')
+    argparser.add_argument("-G", "--gpu_devices", type='int', required=True, default=None, help='select which gpu devices to use')
+    args = argparser.parse_args()
 
 
-
-###               ###
-#     read data     #
-###               ###
+                            ###               ###
+                            #     read data     #
+                            ###               ###
 
 path = os.path.abspath(".")
 pt_path = os.path.join(path, 'dataExample.pt')
@@ -37,30 +42,36 @@ val_DL = DataLoader(val_DS, batch_size=1, num_workers=4)
 
 
 
-###                  ###
-#     define model     #
-###                  ###
+                            ###                  ###
+                            #     define model     #
+                            ###                  ###
 
 # define neural network surrogate
 u_theta = models.MLP_surrogate(channels = [2, 32, 32, 32, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
-Pdyn_model = models.Cspline_PINN(u=u_theta, n_knot=11, lr=3e-3)
+Model_Class = eval(f"models.{args.model}")
+Pdyn_model = Model_Class(u=u_theta, n_knot=11, lr=3e-3)
 
-# pretrained
-# ckpt_path = os.path.join(main_path, "logs/Cspline_PINN/lightning_logs/version_3/checkpoints/epoch=297-total_loss=10.55338860.ckpt")
-# Pdyn_model = models.Cspline_PINN.load_from_checkpoint(ckpt_path)
+if args.pretrained is not None:
+    assert os.path.exists(args.pretrained), "pretrained weights not found"
+    Pdyn_model = models.Cspline_PINN.load_from_checkpoint(args.pretrained)
 
 
-###                     ###
-#     define Triainer     #
-###                     ###
-
+                            ###                     ###
+                            #     define Triainer     #
+                            ###                     ###
+                            
+# device
 device = 'gpu' if torch.cuda.is_available() else 'cpu'
-gpu_device = 2
-pth_save_path = os.path.join(main_path, "logs/Cspline_PINN/")
+device = 'cpu' if args.gpu_devices == None else 'gpu'
+gpu_device = args.gpu_devices
+
+# logger and checkpoints
+pth_save_path = os.path.join(main_path, f"logs/{args.model}/")
 tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 
+# trainer
 trainer = pl.Trainer(auto_lr_find=True,
                      accelerator=device,
                      # fast_dev_run=True,
@@ -72,11 +83,6 @@ trainer = pl.Trainer(auto_lr_find=True,
                                                   monitor="total_loss", mode="min", save_top_k=2)]
                      )
 
-# callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{val_cre:.8f}',
-#                                                   monitor="val_cre", mode="min", save_top_k=2),
-#                                 callbacks.EarlyStopping(monitor="val_cre", mode="min", patience=20),]
-
-
-
+# start training
 Pdyn_model.train()
 trainer.fit(Pdyn_model, train_DL)

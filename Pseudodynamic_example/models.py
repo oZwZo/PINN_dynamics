@@ -134,7 +134,6 @@ class Cspline_PINN(PINN_base):
         Agument
         -------
         n_knot : the number of knots of the CubicSpline function
-        
         """
         
         super().__init__(u=u, n_grid=n_grid, lr=lr, optim_class=optim_class)
@@ -143,5 +142,52 @@ class Cspline_PINN(PINN_base):
         self.v = CubicSpline(n_knot=n_knot)
         self.g = CubicSpline(n_knot=n_knot)
         
-    
+
+class Cspline_symKLD(PINN_base):
+    def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+        """
+        optimize the u_theta and cubic spline with an additional symmetric KLD loss
+
+        Agument
+        -------
+        n_knot : the number of knots of the CubicSpline functio
+        """
+        super().__init__(u=u, n_knot=n_knot, n_grid=n_grid, lr = lr, optim_class=optim_class)
         
+
+    def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:
+        """
+        the loss defined as the kl divergence of the distribution, used to keep the shape
+        """
+        # the density is non-negative
+        u_b = u_b + 1e-17
+        u_pred_b = u_pred_b - u_pred_b.min(axis=1)[0].view(-1,1) + 1e-17
+
+        # KLD q-p, and KLD p-q
+        L_kld = self.KLD_fn(u_pred_b.squeeze().log(), u_b.squeeze()).mean(axis=1).sum()
+        L_kld2 = self.KLD_fn(u_b.squeeze().log(), u_pred_b.squeeze()).mean(axis=1).sum()
+        
+        return (L_kld + L_kld2) / 2
+    
+
+    def training_step(self, train_batch, index):
+        """
+        Add symmetric KLD loss to total loss
+        """
+
+        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+
+
+        if self.current_epoch >= 1:
+            # only apply kld loss after the first epoch
+            Loss_total = Loss_r + Loss_b + Loss_p + Loss_k
+        else:
+            Loss_total = Loss_r + Loss_b + Loss_p
+
+        self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
+        
+        return Loss_total
+    

@@ -65,7 +65,8 @@ class PINN_base(pl.LightningModule):
         """
         use the neural network to evaluate the density 
         """
-        return self.u(s,t)
+        u = self.u(s,t)
+        return u - u.min(axis=1)[0].view(-1,1)
     
     def formular(self, s, t) -> tuple:
         """
@@ -227,10 +228,16 @@ class PINN_base(pl.LightningModule):
         Var = Var.T.float()
 
         return s_col, t_col, s_all, t_b, u_b, Mean, Var
-    
-    def training_step(self, train_batch, index):
+
+    def compute_loss(self, batch_data):
         """
         get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
         """
         s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(train_batch)
         
@@ -238,18 +245,24 @@ class PINN_base(pl.LightningModule):
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b)
-        Loss_k = self.distribution_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
-        
-        
+        Loss_k = self.distribution_loss(u_pred_b, u_b)
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
         
-        # Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
-        Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
+        return Loss_r, Loss_b, Loss_p, Loss_k
+    
+    def training_step(self, train_batch, index):
+        """
+        log individual loss term and them combine then into total loss
+        """
+        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+        
+        Loss_total = Loss_r + Loss_b + Loss_p
+        # Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
+        # Loss_total =  Loss_r + Loss_b + Loss_p + Loss_k # 
         
         self.log("residual_loss", Loss_r, on_epoch=True)
-        self.log("distribution_loss", Loss_k, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
