@@ -143,7 +143,7 @@ class Cspline_PINN(PINN_base):
         self.g = CubicSpline(n_knot=n_knot)
         
 
-class Cspline_symKLD(PINN_base):
+class Cspline_symKLD(Cspline_PINN):
     def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
         """
         optimize the u_theta and cubic spline with an additional symmetric KLD loss

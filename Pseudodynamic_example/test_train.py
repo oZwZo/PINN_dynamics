@@ -13,17 +13,17 @@ import models as models
 from reader import Pdyn_ExtractDataset
 
 
-if __name__ == '__name__':
-    argparser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
-    argparser.add_argument("-M", "--model", type='str', required=False, default="CubicSpline", help=' the model class (defined in models.py)')
-    argparser.add_argument("-W", "--pretrained", type='str', required=False, default=None, help='the path of the pretrained weights')
-    argparser.add_argument("-G", "--gpu_devices", type='int', required=True, default=None, help='select which gpu devices to use')
-    args = argparser.parse_args()
+
+parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
+parser.add_argument("-M", "--model", type=str, required=False, default="CubicSpline", help='the model class, defined in models.py')
+parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
+parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
+args = parser.parse_args()
 
 
-                            ###               ###
-                            #     read data     #
-                            ###               ###
+                        ###               ###
+                        #     read data     #
+                        ###               ###
 
 path = os.path.abspath(".")
 pt_path = os.path.join(path, 'dataExample.pt')
@@ -73,15 +73,15 @@ tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 
 # trainer
 trainer = pl.Trainer(auto_lr_find=True,
-                     accelerator=device,
-                     # fast_dev_run=True,
-                     default_root_dir=pth_save_path,
-                     logger=tb_logger,
-                     devices = [gpu_device],
-                     max_epochs=300,
-                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
-                                                  monitor="total_loss", mode="min", save_top_k=2)]
-                     )
+                    accelerator=device,
+                    # fast_dev_run=True,
+                    default_root_dir=pth_save_path,
+                    logger=tb_logger,
+                    devices = [gpu_device],
+                    max_epochs=300,
+                    callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
+                                                monitor="total_loss", mode="min", save_top_k=2)]
+                    )
 
 # start training
 Pdyn_model.train()

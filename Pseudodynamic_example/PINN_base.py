@@ -163,7 +163,7 @@ class PINN_base(pl.LightningModule):
         u_pred_b : u predicted at boundary timepoint
         u_b : observed boundary
         """
-        return self.SSE_fn(u_pred_b, u_b) 
+        return self.SSE_fn(u_pred_b.squeeze(), u_b.squeeze()) 
     
     def risidual_loss(self, s, t) -> torch.Tensor:
         """
@@ -175,7 +175,7 @@ class PINN_base(pl.LightningModule):
         t: experimental time
         """
         lhs, rhs = self.simplified_formular(s, t)
-        return self.SSE_fn(rhs, lhs)
+        return self.SSE_fn(rhs.squeeze(), lhs.squeeze())
         
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
@@ -239,7 +239,7 @@ class PINN_base(pl.LightningModule):
         boundary loss
         population loss
         """
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(train_batch)
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch_data)
         
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
