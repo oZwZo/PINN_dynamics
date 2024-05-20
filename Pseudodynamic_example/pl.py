@@ -19,18 +19,18 @@ def load_model():
 
 # predict behavior
 
-def behavior_curves(log_model, n_grid=300):
+def behavior_curves(model, n_grid=300):
 
     s = np.linspace(0, 1, n_grid)
     grid_ts = torch.from_numpy(s)
 
-    v_knots  = log_model.v.y.detach().numpy()
-    g_knots  = log_model.g.y.detach().numpy()
-    D_knots  = log_model.D.y.detach().numpy()
+    v_knots  = model.v.y.detach().numpy()
+    g_knots  = model.g.y.detach().numpy()
+    D_knots  = model.D.y.detach().numpy()
 
-    v_curve  = log_model.v(grid_ts, 0).detach().numpy()
-    g_curve  = log_model.g(grid_ts, 0).detach().numpy()
-    D_curve  = log_model.D(grid_ts, 0).detach().numpy()
+    v_curve  = model.v(grid_ts, 0).detach().numpy()
+    g_curve  = model.g(grid_ts, 0).detach().numpy()
+    D_curve  = model.D(grid_ts, 0).detach().numpy()
 
     fig, axs = plt.subplots(1, 3, figsize=(14,3), dpi=400)
     axs = axs.flatten()
@@ -91,3 +91,31 @@ def density_by_time(u_b, u_pred_b, train_DS):
     axs[5].set_xlabel('cell state')
 
     return fig, axs
+
+
+
+def predict_and_vis(model, data_batch, train_DS, curveplot=True, densityplot=True, return_pred=True):
+    s_col, t_col, s_all, t_b, u_b, Mean, Var = model.get_data(data_batch, False)
+
+    grid_s = np.linspace(0,1,s_all.shape[1])
+
+    # predict
+    u_pred_b = model.u(s_all, t_b)
+
+    u_pred_b = u_pred_b.detach().numpy()
+    u_b = u_b.detach().numpy()[0]
+    N_theta = 0.5*(u_pred_b[:,1:]+u_pred_b[:,:-1]).sum(axis=1)
+    Mean = Mean.detach().numpy().flatten()
+    Var = Var.detach().numpy().flatten()
+
+    if curveplot:
+        behavior_curves(model);
+    if densityplot:
+        density_by_time(u_b, u_pred_b, train_DS);
+    
+    print(N_theta)
+    print(Mean)
+
+
+    if return_pred:
+        return u_pred_b, N_theta
