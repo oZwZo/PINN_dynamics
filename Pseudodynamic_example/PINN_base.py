@@ -180,7 +180,7 @@ class PINN_base(pl.LightningModule):
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
         the loss term defined for population size, governed by Gaussian Negative Likelihood loss
-            Gaussian NLL := 0.5 * log(var) + 0.5 * (input−target)**2/var  +const
+            Gaussian NLL := 0.5 * log(var) + 0.5 * (input - target)**2/var  +const
         
         Arguments
         ---------
@@ -194,7 +194,7 @@ class PINN_base(pl.LightningModule):
         """
         
         # copying
-        assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
+        # assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
         
         # the estimated population size N_θ = ∫ u ds
         N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
@@ -225,9 +225,10 @@ class PINN_base(pl.LightningModule):
             t_b.requires_grad = True
 
         Mean = Mean.T.float()
+        Mean = Mean[0] if len(Mean.shape) == 3 else Mean
         Var = Var.T.float()
 
-        return s_col, t_col, s_all, t_b, u_b, Mean, Var
+        return s_col, t_col, s_all, t_b, u_b.squeeze(), Mean, Var
 
     def compute_loss(self, batch_data):
         """

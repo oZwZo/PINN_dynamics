@@ -56,6 +56,7 @@ class CubicSpline(nn.Module):
     def __init__(self, x=None, y=None, n_knot=11):
         """
         cubic hermit spine function for modelling cell behavior value
+        x : the coordinate space
         """
         super().__init__()
         
@@ -67,10 +68,6 @@ class CubicSpline(nn.Module):
      
         self.register_buffer("x", torch.tensor(x, dtype=torch.float32, requires_grad=False))
         self.y = torch.nn.parameter.Parameter(y, requires_grad=True)
-
-        # parameters.guess = [parD*ones(9,1);-2;-2;-2;-2;-2;-4;-4;-10;-12;parA*ones(9,1)]
-        # parameters.min = [-10.3616*ones(1,9),-11.5129*ones(1,9),-6*ones(1,9)];
-        # parameters.max = [0*ones(1,9),0*ones(1,9),5*ones(1,9)];
         
     
     def h_poly(self,t) -> torch.Tensor:
@@ -127,7 +124,7 @@ class CubicSpline(nn.Module):
     
     
 class Cspline_PINN(PINN_base):
-    def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, u:nn.Module, n_knot=9, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
         """
         The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
@@ -138,9 +135,21 @@ class Cspline_PINN(PINN_base):
         
         super().__init__(u=u, n_grid=n_grid, lr=lr, optim_class=optim_class)
         
-        self.D = CubicSpline(n_knot=n_knot)
-        self.v = CubicSpline(n_knot=n_knot)
-        self.g = CubicSpline(n_knot=n_knot)
+        if n_knot == 9:
+            vy = torch.from_numpy(np.array([-2,-2,-2,-2,-2,-4,-4,-10,-12])).float()
+        else:
+            vy = -2*torch.ones(n_knot)
+            vy[-2] = -10
+            vy[-1] = -12
+            
+
+        self.D = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+        self.v = CubicSpline(vy,n_knot=n_knot)
+        self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+
+        # parameters.guess = [parD*ones(9,1);-2;-2;-2;-2;-2;-4;-4;-10;-12;parA*ones(9,1)]
+        # parameters.min = [-10.3616*ones(1,9),-11.5129*ones(1,9),-6*ones(1,9)];
+        # parameters.max = [0*ones(1,9),0*ones(1,9),5*ones(1,9)];
         
 
 class Cspline_symKLD(Cspline_PINN):

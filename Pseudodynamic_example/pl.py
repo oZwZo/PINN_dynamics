@@ -103,7 +103,7 @@ def predict_and_vis(model, data_batch, train_DS, curveplot=True, densityplot=Tru
     u_pred_b = model.u(s_all, t_b)
 
     u_pred_b = u_pred_b.detach().numpy()
-    u_b = u_b.detach().numpy()[0]
+    u_b = u_b.detach().numpy()
     N_theta = 0.5*(u_pred_b[:,1:]+u_pred_b[:,:-1]).sum(axis=1)
     Mean = Mean.detach().numpy().flatten()
     Var = Var.detach().numpy().flatten()
