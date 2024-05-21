@@ -12,6 +12,7 @@ from pytorch_lightning import loggers as pl_loggers
 import models as models
 import reader 
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
@@ -49,11 +50,11 @@ train_DL = DataLoader(train_DS, batch_size=1, num_workers=4, shuffle=True)
                             ###                  ###
 
 # define neural network surrogate
-u_theta = models.MLP_surrogate(channels = [2, 32, 32, 32, 1], activation_fn='Tanh')
+u_theta = models.MLP_surrogate(channels = [2, 32, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
 Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_knot=11, lr=3e-3)
+Pdyn_model = Model_Class(u=u_theta, n_knot=9, lr=3e-3)
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"

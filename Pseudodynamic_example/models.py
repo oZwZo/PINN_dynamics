@@ -144,7 +144,7 @@ class Cspline_PINN(PINN_base):
             
 
         self.D = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
-        self.v = CubicSpline(vy,n_knot=n_knot)
+        self.v = CubicSpline(y = vy, n_knot=n_knot)
         self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
 
         # parameters.guess = [parD*ones(9,1);-2;-2;-2;-2;-2;-4;-4;-10;-12;parA*ones(9,1)]
