@@ -9,7 +9,8 @@ class Pdyn_ExtractDataset(Dataset):
     
     def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
         """
-        PINN-dynamics Dataset with the output of extracted data. The  
+        PINN-dynamics Dataset using the pre-extracted data.   
+        This dataset returns full cell state (0-1) for each mini-batch
         
         Augment
         --------
@@ -33,6 +34,7 @@ class Pdyn_ExtractDataset(Dataset):
         # create grided cell state
         ###
         n_grid = n_grid
+        self.n_grid = n_grid
         s = np.linspace(0, 1, n_grid)
         self.s = torch.from_numpy(s)
         h_inv = (1 / (s[1] - s[0]))
@@ -86,7 +88,53 @@ class Pdyn_ExtractDataset(Dataset):
         var = torch.from_numpy(self.pop_var).float()
         
         return s_col, t_col, s_all, t_b, u_b, mean, var
+
+
+class Random_ExtractDataset(Pdyn_ExtractDataset):
+
+    def __init__(self, Data_pt, n_time=10, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
+        """
+        Based on the pre-extracted dataset, 
+
+        Augments
+        -----------
+        Data_pt :
+        n_time : the range of cell state in a minibatch
+
+        """
+        super().__init__(Data_pt, n_grid=n_grid, collocation_points=collocation_points, n_repeat=n_repeat, log_transform=log_transform)       
+        self.n_time = n_time
+    
+    def __len__(self):
+        # repeat sampling for 10 times
+        return self.n_grid - self.n_time
+
+    def __getitem__(self, i):
+        """
+        there is no mini-batch, each item returns the full collocation points
+        """ 
+
+        s_range = slice(i, i + self.n_time)
+
+
+        # random collocation points across the s and t domain
+        s_col = self.s.clone().detach().float().view(-1,1)[s_range,:]
+        t_col = torch.Tensor(self.n_time,1).uniform_(min(self.T_b), max(self.T_b)).float()
         
+        
+        t_b = torch.from_numpy(self.t_b).float()[:, s_range]
+        s_all = self.s.clone().detach().float().view(1,-1)[:, s_range]
+        s_all = s_all.broadcast_to(t_b.shape).float()
+
+        #
+        u_b = torch.from_numpy(self.u_b).float()[:, s_range]
+        mean = 0.5*(u_b[:,1:]+u_b[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
+
+        # mean = torch.from_numpy(self.pop_mean).float()
+        var = torch.from_numpy(self.pop_var).float()
+        
+        return s_col, t_col, s_all, t_b, u_b, mean, var
+
         
 #TODO: complete AnnDataset
 class Pdyn_AnnDataset(Dataset):

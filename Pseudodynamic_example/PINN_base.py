@@ -65,7 +65,8 @@ class PINN_base(pl.LightningModule):
         """
         use the neural network to evaluate the density 
         """
-        return self.u(s,t)
+        u = self.u(s,t)
+        return u - u.min(axis=1)[0].view(-1,1)
     
     def formular(self, s, t) -> tuple:
         """
@@ -162,7 +163,7 @@ class PINN_base(pl.LightningModule):
         u_pred_b : u predicted at boundary timepoint
         u_b : observed boundary
         """
-        return self.SSE_fn(u_pred_b, u_b) 
+        return self.SSE_fn(u_pred_b.squeeze(), u_b.squeeze()) 
     
     def risidual_loss(self, s, t) -> torch.Tensor:
         """
@@ -174,12 +175,12 @@ class PINN_base(pl.LightningModule):
         t: experimental time
         """
         lhs, rhs = self.simplified_formular(s, t)
-        return self.SSE_fn(rhs, lhs)
+        return self.SSE_fn(rhs.squeeze(), lhs.squeeze())
         
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
         the loss term defined for population size, governed by Gaussian Negative Likelihood loss
-            Gaussian NLL := 0.5 * log(var) + 0.5 * (input−target)**2/var  +const
+            Gaussian NLL := 0.5 * log(var) + 0.5 * (input - target)**2/var  +const
         
         Arguments
         ---------
@@ -193,7 +194,7 @@ class PINN_base(pl.LightningModule):
         """
         
         # copying
-        assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
+        # assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
         
         # the estimated population size N_θ = ∫ u ds
         N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
@@ -224,38 +225,50 @@ class PINN_base(pl.LightningModule):
             t_b.requires_grad = True
 
         Mean = Mean.T.float()
+        Mean = Mean[0] if len(Mean.shape) == 3 else Mean
         Var = Var.T.float()
 
-        return s_col, t_col, s_all, t_b, u_b, Mean, Var
-    
-    def training_step(self, train_batch, index):
+        return s_col, t_col, s_all, t_b, u_b.squeeze(), Mean, Var
+
+    def compute_loss(self, batch_data):
         """
         get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
         """
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(train_batch)
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch_data)
         
         # predict at boundary time poits
         u_pred_b = self.u(s_all, t_b)
         
         Loss_b = self.boundary_loss(u_pred_b, u_b)
-        Loss_k = self.distribution_loss(u_pred_b, u_b)
         Loss_p = self.population_loss(u_pred_b, Mean, Var)
-        
-        
+        Loss_k = self.distribution_loss(u_pred_b, u_b)
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
         
-        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
+        return Loss_r, Loss_b, Loss_p, Loss_k
+    
+    def training_step(self, train_batch, index):
+        """
+        log individual loss term and them combine then into total loss
+        """
+        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+        
+        Loss_total = Loss_r + Loss_b + Loss_p
+        # Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
+        # Loss_total =  Loss_r + Loss_b + Loss_p + Loss_k # 
         
         self.log("residual_loss", Loss_r, on_epoch=True)
-        self.log("distribution_loss", Loss_k, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
         
         return Loss_total
-        
-        
     
     def validation_step(self, val_batch, index):
         
@@ -281,30 +294,23 @@ class PINN_base(pl.LightningModule):
         self.log("total_loss", Loss_total, on_epoch=True)
 
         return Loss_total
-        
     
-    def test_step(self, test_databatch, index):
-        
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(test_databatch)
-        
-        
-        # predict at boundary time poits
+    def predict_boundary(self,batch):
+        """
+        predicts density u and cell number N for the observed time points
+        """
+
+        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch, False)
+
+        grid_s = np.linspace(0,1,s_all.shape[1])
+
+        # predict
         u_pred_b = self.u(s_all, t_b)
-        
-        Loss_b = self.boundary_loss(u_pred_b, u_b)
-        Loss_k = self.distribution_loss(u_pred_b, u_b)
-        Loss_p = self.population_loss(u_pred_b, Mean, Var)
-        
-        
-        # residual loss defied on collocation points
-        Loss_r = self.risidual_loss(s_col, t_col)
-        
-        Loss_total = Loss_r + Loss_k + Loss_b + Loss_p
-        
-        self.log("residual_loss", Loss_r)
-        self.log("distribution_loss", Loss_k, on_epoch=True)
-        self.log("boundary_loss", Loss_b, on_epoch=True)
-        self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
-        
-        return Loss_total
+
+        u_pred_b = u_pred_b.detach().numpy()
+        u_b = u_b.detach().numpy()[0]
+        N_theta = 0.5*(u_pred_b[:,1:]+u_pred_b[:,:-1]).sum(axis=1)
+        Mean = Mean.detach().numpy().flatten()
+        Var = Var.detach().numpy().flatten()
+
+        return u_pred_b, N_theta
