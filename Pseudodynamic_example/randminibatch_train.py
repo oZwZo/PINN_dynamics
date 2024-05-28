@@ -16,7 +16,7 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
-parser.add_argument("-M", "--model", type=str, required=False, default="CubicSpline", help='the model class, defined in models.py')
+parser.add_argument("-M", "--model", type=str, required=False, default="Cspline_PINN", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 args = parser.parse_args()
@@ -40,7 +40,7 @@ train_DS = reader.Random_ExtractDataset(Data_pt=pt_path, n_time=10, n_grid=300, 
 
 # val_DS= reader.Pdyn_ExtractDataset(Data_pt=pt_path, n_grid=300, collocation_points=300, n_repeat=1)
 
-train_DL = DataLoader(train_DS, batch_size=1, num_workers=4, shuffle=True)
+train_DL = DataLoader(train_DS, batch_size=1, num_workers=10, shuffle=True)
 # val_DL = DataLoader(val_DS, batch_size=1, num_workers=4)
 
 
@@ -50,11 +50,11 @@ train_DL = DataLoader(train_DS, batch_size=1, num_workers=4, shuffle=True)
                             ###                  ###
 
 # define neural network surrogate
-u_theta = models.MLP_surrogate(channels = [2, 32, 1], activation_fn='Tanh')
+u_theta = models.MLP_surrogate(channels = [2, 32, 8, 1], activation_fn='Tanh')
 
 # pseudo dynamics model
 Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_knot=9, lr=3e-3)
+Pdyn_model = Model_Class(u=u_theta, n_knot=9, lr=3e-4)
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"
@@ -75,7 +75,8 @@ pth_save_path = os.path.join(main_path, f"logs/{args.model}_RandMiniB/")
 tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 
 # trainer
-trainer = pl.Trainer(auto_lr_find=True,
+trainer = pl.Trainer(
+                    #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
                     default_root_dir=pth_save_path,
