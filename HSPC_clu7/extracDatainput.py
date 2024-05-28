@@ -11,7 +11,7 @@ import torch
 # data_path = "/home/wergillius/Project/HSPCdynamics/procdata/04script/"
 # clu7_df = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/table_all_parameters_clu_7.csv", index_col=0)
 R = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/input_pseudo_dyn_clu_7_dpt.csv")
-RN = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/input_pseudo_dyn_rolling_clu_7_size.csv")
+RN = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/input_pseudo_dyn_clu_7_size.csv")
 
 # ad = sc.read_h5ad(f"{data_path}/combined_filt.h5ad")
 
@@ -91,16 +91,17 @@ for t in D['pop']['t']:
         # the result is the interpolated cumulative density at xsdt
         csdr[:, ih] = torch.tensor(np.interp(xsdt[-1], xsd[ir], csd[ir]))
         area_temp.append(torch.sum(torch.diff(torch.from_numpy(xsdt[-1])) * torch.abs(torch.tensor(csdt[-1][:-1]) - csdr[:-1, ih])))
-    areat.append(area_temp)
+    areat.append(torch.cat(area_temp))
 
 D['xsdt'] = xsdt
 D['csdt'] = csdt
     
-areat = torch.tensor(areat)
-indr_len_it = torch.tensor(indr_len_it)
+areat = [torch.tensor(area) for area in areat]
+# indr_len_it = torch.tensor(indr_len_it)
     
 D['dist'] = {}
-D['dist']['mean'] = torch.mean(areat, dim=1)
-D['dist']['var'] = torch.var( torch.div(areat, indr_len_it.view(-1,1)), dim=1)
+D['dist']['mean'] = torch.tensor([torch.mean(area) for area in areat])
+D['dist']['var'] = torch.tensor([torch.var(area/indr_len_it[i]) for i,area in enumerate(areat)])
+# torch.var( torch.div(areat, indr_len_it.view(-1,1)), dim=1)
 
-torch.save(D, 'HSPC_clu7rolling.pt')
+torch.save(D, 'HSPC_clu7.pt')
