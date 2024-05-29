@@ -11,3 +11,7 @@ Pseudodynamic_example/__pycache__/models.cpython-38.pyc
 Pseudodynamic_example/.ipynb_checkpoints/functions-checkpoint.py
 Pseudodynamic_example/.ipynb_checkpoints/functions-checkpoint.py
 .vscode/*
+PINN.egg-info
+PINN.egg-info/*
+nohup.out
+.vscode

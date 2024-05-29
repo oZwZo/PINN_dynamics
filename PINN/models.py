@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
-from PINN_base import PINN_base
+from .PINN_base import PINN_base
 
 class MLP_surrogate(nn.Module):
     

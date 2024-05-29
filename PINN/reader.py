@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import pandas as pd
-import functions as myfn
+from . import functions as myfn
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 
