@@ -46,14 +46,14 @@ class Pdyn_ExtractDataset(Dataset):
         tb_ls = []
         var_ls = []
         
-        for t in D['pop']['t']:
+        for tb_idx, t_b in enumerate(D['pop']['t']):
             
             # quantify the cell densitied at grided s
-            u, N, n_exp = myfn.boundary_density_at(D, t, s)
+            u, N, n_exp = myfn.boundary_density_at(D, t_b, s)
                     
             ub_ls.append(u / h_inv)
-            tb_ls.append(np.full_like(u, t))
-            var_ls.append(D['pop']['var'][t] /n_exp)
+            tb_ls.append(np.full_like(u, t_b))
+            var_ls.append(D['pop']['var'][tb_idx] /n_exp)
         
         self.u_b = np.vstack(ub_ls)  # (tb, n_grid)
         self.t_b = np.vstack(tb_ls)

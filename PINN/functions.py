@@ -22,6 +22,7 @@ def boundary_density_at(D, t_b, x):
     
     # find the batch that belong to the tb time point
     tp_index = [i for i, t in enumerate(D['ind']['tp']) if t==t_b]  
+    
     n_lib = len(tp_index) 
     
     n_grid = x.shape[0]
@@ -41,10 +42,13 @@ def boundary_density_at(D, t_b, x):
         ut[i0, :] /= trapz(ut[i0, :], x)
         Nt[i0] = len(D['ind']['hist'][i_hist]) # n cells
 
-    u_t = np.mean(ut, axis=0) * D['pop']['mean'][t_b]
+
+    tb_index = np.where(D['pop']['t']==t_b)[0].item()
+    u_t = np.mean(ut, axis=0) * D['pop']['mean'][tb_index]
     # u_t = 0.5 * (u_t[:-1] + u_t[1:])
 
-    n_exp = 1  #TODO: change n_exp ?
+    # n_exp = 1  #TODO: change n_exp ?
+    n_exp = n_lib
     
     return u_t, Nt, n_exp
 
