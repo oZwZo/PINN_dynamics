@@ -2,10 +2,12 @@ import os
 import numpy as np
 import pandas as pd
 import torch 
-import models
-from reader import Pdyn_ExtractDataset
+from . import models
+from .reader import Pdyn_ExtractDataset
+from . import functions  as myfun
 from matplotlib import pyplot as plt
 from matplotlib import cm
+
 
 def load_model():
     # define neural network surrogate
@@ -63,9 +65,9 @@ def density_by_time(u_b, u_pred_b, train_DS):
     if isinstance(u_pred_b, torch.Tensor):
         u_pred_b = u_pred_b.detach().numpy()
         
-    for i in range(6):
+    for i in range(len(train_DS.T_b)):
         axs[0].plot(cell_state, u_b[i], label=i)
-        axs[1].plot(cell_state, u_pred_b[i], '--', label=i)
+        axs[1].plot(cell_state, u_pred_b[i], '--', label=train_DS.T_b[i])
     
     axs[0].set_title('observation')
     axs[1].set_title('prediction')
@@ -75,20 +77,20 @@ def density_by_time(u_b, u_pred_b, train_DS):
     axs[0].set_ylabel('density')
     
     plt.legend(ncol=2)
-    fig, axs = plt.subplots(len(train_DS.T_b)//2, 2, figsize=(6,6), sharex=True, 
+    fig, axs = plt.subplots(int(np.ceil(len(train_DS.T_b)/2)), 2, figsize=(6,6), sharex=True, 
                         gridspec_kw={'hspace':0.4},  dpi=300)
     axs = axs.flatten()
 
     for i,t in enumerate(train_DS.T_b):
-        axs[i].plot(cell_state, u_b[t],  label='observed')
-        axs[i].plot(cell_state, u_pred_b[t], '--', label='pred')
+        axs[i].plot(cell_state, u_b[i],  label='observed')
+        axs[i].plot(cell_state, u_pred_b[i], '--', label='pred')
         axs[i].set_title('day %s'%t)
         if i%2 ==0 :
             axs[i].set_ylabel("density")
 
     axs[0].legend()
-    axs[4].set_xlabel('cell state')
-    axs[5].set_xlabel('cell state')
+    axs[-2].set_xlabel('cell state')
+    axs[-1].set_xlabel('cell state')
 
     return fig, axs
 
@@ -119,3 +121,23 @@ def predict_and_vis(model, data_batch, train_DS, curveplot=True, densityplot=Tru
 
     if return_pred:
         return u_pred_b, N_theta
+
+
+def evaluate_behavior_for_cell(ad, model, dpt_key='dpt_pseudotime'):
+
+    dpt = ad.obs[dpt_key].values
+    scaled_dpt = myfun.scale_dpt(dpt)
+
+    cellstate = torch.from_numpy(scaled_dpt)
+
+    v_curve  = model.v(cellstate, 0).detach().numpy()
+    g_curve  = model.g(cellstate, 0).detach().numpy()
+    D_curve  = model.D(cellstate, 0).detach().numpy()
+
+    ad.obs['PINN_v'] = v_curve
+    ad.obs['PINN_g'] = g_curve
+    ad.obs['PINN_D'] = D_curve
+
+    # sc.pl.umap(ad, colors=['PINN_v','PINN_g', 'PINN_D'])
+
+    return ad

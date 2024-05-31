@@ -23,7 +23,7 @@ class PINN_base(pl.LightningModule):
         self.save_hyperparameters()
         
         # PDE discretization
-        self.n_grid = 300
+        self.n_grid = n_grid
         grid = np.linspace(0, 1, n_grid)
         self.grid = grid
         h_inv = (1 / (grid[1] - grid[0]))
@@ -252,7 +252,7 @@ class PINN_base(pl.LightningModule):
         Loss_r = self.risidual_loss(s_col, t_col)
         
         return Loss_r, Loss_b, Loss_p, Loss_k
-    
+
     def training_step(self, train_batch, index):
         """
         log individual loss term and them combine then into total loss

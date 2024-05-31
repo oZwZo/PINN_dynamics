@@ -4,6 +4,16 @@ from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
 
 
+def scale_dpt(dpt):
+    """
+    scale dpt array to 0 and 1
+    """
+    dpt_min = dpt.min()
+    dpt_max = dpt.max()
+    dpt_scaled = (dpt - dpt_min) / (dpt_max - dpt_min)
+    
+    return dpt_scaled
+
 def boundary_density_at(D, t_b, x):
     """
     extract the cell density at time point `t_b`

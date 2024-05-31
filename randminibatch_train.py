@@ -21,6 +21,7 @@ parser.add_argument("-M", "--model", type=str, required=False, default="Cspline_
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
+parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--channels", type=str, required=False, default="2,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
 
@@ -43,10 +44,10 @@ if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 
-train_DS = reader.Random_ExtractDataset(Data_pt=pt_path, n_time=10, n_grid=300, collocation_points=300, n_repeat=10)
+train_DS = reader.Random_ExtractDataset(Data_pt=pt_path, n_time=10, n_grid=args.n_grid, collocation_points=300, n_repeat=10)
 
 
-train_DL = DataLoader(train_DS, batch_size=1, num_workers=10, shuffle=True)
+train_DL = DataLoader(train_DS, batch_size=1, num_workers=20, shuffle=True)
 
 
 
@@ -60,7 +61,7 @@ u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 
 # pseudo dynamics model
 Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_knot=9, lr=args.lr)
+Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_knot=9, lr=args.lr)
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"
