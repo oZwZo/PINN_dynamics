@@ -4,17 +4,18 @@ import pandas as pd
 import torch
 from torch import nn
 import pytorch_lightning as pl
-from typing import Any, Union
+from typing import Any, Union, Callable
 
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, *, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False, **kwargs):
         """
         u_theta : the neural netowrk surrogate of u
         
         Arguments:
         lr: float, the learning rate
         optim_class : str, the optimizer used
+        schedule_lr : str or callable, the way to control learnign rate scheduler
         
         Return:
         the PINN
@@ -23,6 +24,7 @@ class PINN_base(pl.LightningModule):
         self.save_hyperparameters()
         
         # PDE discretization
+        self.schedule_lr = schedule_lr
         self.n_grid = n_grid
         grid = np.linspace(0, 1, n_grid)
         self.grid = grid
@@ -59,7 +61,25 @@ class PINN_base(pl.LightningModule):
             # i.e. Adam              
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         
-        return optimizer
+        if self.schedule_lr != "False":
+            # so we can pass string
+            if isinstance(self.schedule_lr, Callable):
+                self.scheduler = self.schedule_lr(optimizer)
+
+            else:
+                self.scheduler = torch.optim.lr_scheduler.StepLR(
+                    optimizer, step_size  = 10 , gamma = 0.1)
+                
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler" : {
+                    "scheduler" : self.scheduler,
+                    "monitor" : "total_loss",
+                    }
+                }
+        else:
+            return optimizer
+            
     
     def fowrard(self, s, t) -> torch.Tensor:
         """
@@ -224,8 +244,7 @@ class PINN_base(pl.LightningModule):
             s_all.requires_grad = True
             t_b.requires_grad = True
 
-        Mean = Mean.T.float()
-        Mean = Mean[0] if len(Mean.shape) == 3 else Mean
+        Mean = Mean[0].float() if len(Mean.shape) == 3 else Mean.T.float()
         Var = Var.T.float()
 
         return s_col, t_col, s_all, t_b, u_b.squeeze(), Mean, Var
@@ -267,8 +286,12 @@ class PINN_base(pl.LightningModule):
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
         
         return Loss_total
+
+    # def on_train_epoch_end(self):
+    #     self.
     
     def validation_step(self, val_batch, index):
         

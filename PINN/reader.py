@@ -24,6 +24,13 @@ class Pdyn_ExtractDataset(Dataset):
             D['pop']['mean'] = np.log(mu)
             D['pop']['var'] = D['pop']['var']/ mu
 
+            # if np.max(D['pop']['t']) >= 30:
+            #     D['pop']['raw_t'] = D['pop']['t']
+            #     D['pop']['t'] =  np.log(np.where(D['pop']['t']==0, 1, D['pop']['t']))
+                
+            #     D['ind']['tp'] = np.array(D['ind']['tp'])
+            #     D['ind']['raw_tp'] = D['ind']['tp']
+            #     D['ind']['tp'] = np.log(np.where(D['ind']['tp']==0, 1, D['ind']['tp']))
         ###
         # set up params
         ### 

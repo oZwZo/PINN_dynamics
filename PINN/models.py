@@ -124,16 +124,22 @@ class CubicSpline(nn.Module):
     
     
 class Cspline_PINN(PINN_base):
-    def __init__(self, u:nn.Module, n_knot=9, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, *, n_knot=9, **kwargs):
         """
         The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
         Agument
         -------
         n_knot : the number of knots of the CubicSpline function
-        """
         
-        super().__init__(u=u, n_grid=n_grid, lr=lr, optim_class=optim_class)
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        """
+        super().__init__(**kwargs)
+        # super().__init__(u=u, n_grid=n_grid, lr=lr, optim_class=optim_class, schedule_lr=schedule_lr)
         
         if n_knot == 9:
             vy = torch.from_numpy(np.array([-2,-2,-2,-2,-2,-4,-4,-10,-12])).float()
@@ -153,7 +159,7 @@ class Cspline_PINN(PINN_base):
         
 
 class Cspline_symKLD(Cspline_PINN):
-    def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam"):
+    def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=None):
         """
         optimize the u_theta and cubic spline with an additional symmetric KLD loss
 
@@ -161,7 +167,7 @@ class Cspline_symKLD(Cspline_PINN):
         -------
         n_knot : the number of knots of the CubicSpline functio
         """
-        super().__init__(u=u, n_knot=n_knot, n_grid=n_grid, lr = lr, optim_class=optim_class)
+        super().__init__(u=u, n_knot=n_knot, n_grid=n_grid, lr = lr, optim_class=optim_class, schedule_lr=schedule_lr)
         
 
     def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:

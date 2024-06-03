@@ -93,3 +93,28 @@ def augment_cdf(x, x_a, y):
     return y_a
 
 
+def Lambda1(epoch, gamma=0.2):
+    """
+    lr scheduler rule 1, quickly decay then steady
+    """
+    if epoch >= 5 :
+        factor = np.exp((3-epoch**0.4))**gamma + 0.1
+        
+    else:
+        factor = np.exp((5-epoch**0.6))
+
+    return 3 if factor > 3 else factor 
+
+
+def Lambda2(epoch, gamma=0.15, changepoint=150):
+    """
+    lr scheduler rule 2, decay then grow
+    """
+
+    factor_decay = np.exp((3-epoch**0.7))**gamma + 0.01
+
+    changepoint_f = np.exp((3-changepoint**0.7))**gamma
+
+    factor_grow = changepoint_f * np.exp((epoch/changepoint)**2)**gamma
+
+    return factor_decay if epoch <= changepoint else factor_grow 

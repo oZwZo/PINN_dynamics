@@ -1,18 +1,20 @@
-import os, argparse
+import os, argparse, typing
 import numpy as np
 import pandas as pd
 import torch 
 from torch import nn
 from torch.utils.data import DataLoader
-
+from torch.optim import lr_scheduler
+from functools import partial
 import pytorch_lightning as pl
 from pytorch_lightning import callbacks 
 from pytorch_lightning import loggers as pl_loggers
 
 from PINN import models as models
 from PINN import reader 
+from PINN import functions as fns
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
@@ -21,6 +23,7 @@ parser.add_argument("-M", "--model", type=str, required=False, default="Cspline_
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
+parser.add_argument("--schedule_lr", type=str, required=False, default="Step", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--channels", type=str, required=False, default="2,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
@@ -56,12 +59,42 @@ train_DL = DataLoader(train_DS, batch_size=1, num_workers=20, shuffle=True)
                             ###                  ###
 
 # define neural network surrogate
-channels = [int(c) for c in args.channels.split(",")]
-u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
+channels = [int(c) for c in args.channels.split(",")]   
+u_theta = models.MLP_surrogate(channels = [2,32,1], activation_fn='Tanh')
 
 # pseudo dynamics model
+if args.schedule_lr == 'StepLR':
+    schedule_lr = partial(lr_scheduler.StepLR, step_size  = 200 , gamma = 0.5)
+
+elif args.schedule_lr == 'CycleLR':
+    schedule_lr = partial(lr_scheduler.CycleLR, base_lr=args.lr, max_lr=5*args.lr)
+
+elif args.schedule_lr == 'CosineAnnealingLR':
+    schedule_lr = partial(lr_scheduler.CosineAnnealingLR, T_max = 100)
+
+elif args.schedule_lr == 'CosineAnnealingWarmRestarts':
+    schedule_lr = partial(lr_scheduler.CosineAnnealingWarmRestarts, T_0 = 3)
+
+elif args.schedule_lr in dir(torch.optim.lr_sceduler):
+    # suitable for some sch like `LinearLR` `PolynomialLR`
+    schedule_lr = eval("lr_sceduler%s" %args.schedule_lr)
+
+elif isinstance(eval(args.schedule_lr), typing.Callable):
+    # customize schedu_lr
+    rule = eval(args.schedule_lr)
+    schedule_lr = partial(lr_scheduler.LambdaLR, lr_lambda = rule)
+
+elif args.schedule_lr in dir(fns):
+    # pre-defined strategy , can be `Lambda1` or `Lambda2``
+    rule = eval(f"fns.{args.schedule_lr}")
+    schedule_lr = partial(lr_scheduler.LambdaLR, lr_lambda = rule)
+
+else:
+    # pass the String
+    schedule_lr = args.schedule_lr
+
 Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_knot=9, lr=args.lr)
+Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_knot=9, lr=args.lr, schedule_lr=schedule_lr)
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"
