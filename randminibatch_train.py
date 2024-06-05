@@ -64,7 +64,7 @@ u_theta = models.MLP_surrogate(channels = [2,32,1], activation_fn='Tanh')
 
 # pseudo dynamics model
 if args.schedule_lr == 'StepLR':
-    schedule_lr = partial(lr_scheduler.StepLR, step_size  = 200 , gamma = 0.5)
+    schedule_lr = partial(lr_scheduler.StepLR, step_size  = 100 , gamma = 0.5)
 
 elif args.schedule_lr == 'CycleLR':
     schedule_lr = partial(lr_scheduler.CycleLR, base_lr=args.lr, max_lr=5*args.lr)
