@@ -14,9 +14,43 @@ def scale_dpt(dpt):
     
     return dpt_scaled
 
-def boundary_density_at(D, t_b, x):
+def boundary_density_at(D, t_b, x, density_fn:callable=None):
     """
-    extract the cell density at time point `t_b`
+    Evaluate the cell density at time point `t_b` using the pre-defined density function
+    Input
+    -------
+    D: the extracted data dictionary
+    t_b : the boundary time point
+    x : the grided cell state coordiante
+    density_fn : the pre-defined density function
+    
+    Return
+    -------
+    u_t : smoothed cell density over s and adjusted by pop size
+    """
+
+    if density_fn is not None:
+        raise NotImplementedError("the predefined func is not sett up")
+        # u_t, Nt, n_exp = predefine_density(D, t_b, x, density_fn)
+
+    elif len(x.shape) == 1:
+        u_t, Nt, n_exp = evaluate_1d_density(D, t_b, x)
+
+    elif len(x.shape) == 2:
+        u_t, Nt, n_exp = evaluate_2d_mesh_density(D, t_b, x)
+
+    else:
+        # for higher dimensional data
+        # use the data point itself but not sampling from the entire space
+        # u_t, Nt, n_exp = evaluate_2d_mesh_density(D, t_b, x)
+        raise NotImplementedError("higher dimensional func is under development")
+   
+    return u_t, Nt, n_exp
+
+
+def evaluate_1d_density(D, t_b, x):
+    """
+    extract the cell density at time point `t_b`, this function works for 1 dimensional data
     Input
     -------
     D: the extracted data dictionary
@@ -25,7 +59,7 @@ def boundary_density_at(D, t_b, x):
     
     Return
     -------
-    u0 : smoothed cell density over s and adjusted by pop size
+    u_t : smoothed cell density over s and adjusted by pop size
     """
     
     assert t_b in D['pop']['t'], "`t_b` is not the observed time point"
@@ -62,6 +96,57 @@ def boundary_density_at(D, t_b, x):
     
     return u_t, Nt, n_exp
 
+
+def evaluate_2d_mesh_density(D, t_b, x):
+    """
+    extract the cell density at time point `t_b`. this function works for 2 dimensional mesh grid 
+    Input
+    -------
+    D: the extracted data dictionary
+    t_b : the boundary time point
+    x : the mesh grided cell state s1, s2
+    
+    Return
+    -------
+    u_t : smoothed cell density over s and adjusted by pop size
+    """
+    
+    assert t_b in D['pop']['t'], "`t_b` is not the observed time point"
+    
+    # find the batch that belong to the tb time point
+    tp_index = [i for i, t in enumerate(D['ind']['tp']) if t==t_b]  
+    
+    n_lib = len(tp_index) 
+    
+    n_grid = x.shape[0]  # for 2 d, i.e 300 * 300
+
+    space = (x[1,0] - x[0,0])**2
+    
+    ut = np.zeros((n_lib, n_grid))
+    Nt = np.zeros(n_lib)
+    
+    for i0 in range(n_lib):
+        
+        i_hist = tp_index[i0]
+        
+        # compute the density function based on the pdt coord
+        # the input data is (#dim , #samples)
+        density = gaussian_kde(D['ind']['hist'][i_hist].T)
+        
+        # evaluate and normalize at grided time x
+        ut[i0, :] = density(x.T)
+        ut[i0, :] /= trapz(ut[i0, :], dx=space)
+        Nt[i0] = len(D['ind']['hist'][i_hist]) # n cells
+
+
+    tb_index = np.where(D['pop']['t']==t_b)[0].item()
+    u_t = np.mean(ut, axis=0) * D['pop']['mean'][tb_index]
+    # u_t = 0.5 * (u_t[:-1] + u_t[1:])
+
+    # n_exp = 1  #TODO: change n_exp ?
+    n_exp = n_lib
+    
+    return u_t, Nt, n_exp
 
 def augment_cdf(x, x_a, y):
     """

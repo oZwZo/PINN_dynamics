@@ -47,7 +47,7 @@ if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 
-train_DS = reader.Random_ExtractDataset(Data_pt=pt_path, nearby_cellstate=10, n_grid=args.n_grid, collocation_points=300, n_repeat=10)
+train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid, collocation_points=300, n_repeat=10)
 
 
 train_DL = DataLoader(train_DS, batch_size=1, num_workers=20, shuffle=True)
