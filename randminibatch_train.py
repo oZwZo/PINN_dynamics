@@ -75,7 +75,7 @@ elif args.schedule_lr == 'CosineAnnealingLR':
 elif args.schedule_lr == 'CosineAnnealingWarmRestarts':
     schedule_lr = partial(lr_scheduler.CosineAnnealingWarmRestarts, T_0 = 3)
 
-elif args.schedule_lr in dir(torch.optim.lr_sceduler):
+elif args.schedule_lr in dir(torch.optim.lr_scheduler):
     # suitable for some sch like `LinearLR` `PolynomialLR`
     schedule_lr = eval("lr_sceduler%s" %args.schedule_lr)
 
@@ -98,7 +98,7 @@ Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_knot=9, lr=args.lr, sc
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"
-    Pdyn_model = models.Cspline_PINN.load_from_checkpoint(args.pretrained)
+    Pdyn_model = Model_Class.load_from_checkpoint(args.pretrained)
 
 
                             ###                     ###
