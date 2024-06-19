@@ -4,12 +4,8 @@ from scipy.stats import cumfreq
 import torch
 
 # Reading the CSV files
-# R = pd.read_csv('../Pseudodynamic_example/rawData/pseudodynamics_input_example.csv')
-# RN = pd.read_csv('../Pseudodynamic_example/rawData/pseudodynamics_input_example_popsize.csv')
 
 # cluster 7 meta
-# data_path = "/home/wergillius/Project/HSPCdynamics/procdata/04script/"
-# clu7_df = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/table_all_parameters_clu_7.csv", index_col=0)
 R = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/input_pseudo_dyn_clu_7_dpt.csv")
 RN = pd.read_csv("/home/wergillius/Project/HSPCdynamics/PD_model/clu_7/tables/input_pseudo_dyn_clu_7_size.csv")
 

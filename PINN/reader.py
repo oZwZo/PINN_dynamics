@@ -166,7 +166,6 @@ class MeshGrid_DS(Dataset):
             D['pop']['mean'] = np.log(mu)
             D['pop']['var'] = D['pop']['var']/ mu
 
-
         ###
         # set up params
         ### 
@@ -212,7 +211,7 @@ class MeshGrid_DS(Dataset):
 
     def __len__(self):
         # repeat sampling for 10 times
-        return self.n_grid - self.nearby_cellstate
+        return self.s.shape[0] - self.nearby_cellstate
 
     def __getitem__(self, i):
         """
@@ -221,14 +220,15 @@ class MeshGrid_DS(Dataset):
 
         s_range = slice(i, i + self.nearby_cellstate)
 
-
         # random collocation points across the s and t domain
-        s_col = self.s.clone().detach().float().view(-1,1)[s_range,:]
+        s_col = self.s.clone().detach().float()[s_range,:]
         t_col = torch.Tensor(self.nearby_cellstate,1).uniform_(min(self.T_b), max(self.T_b)).float()
         
         t_b = torch.from_numpy(self.t_b).float()[:, s_range]
-        s_all = self.s.clone().detach().float().view(1,-1)[:, s_range]
-        s_all = s_all.broadcast_to(t_b.shape).float()
+        s_all = self.s.clone().detach().float()[s_range, :]
+
+        bc_shape = [t_b.shape[0]] + list(s_all.shape)  # broadcast to
+        s_all = s_all.broadcast_to(bc_shape).float()
 
         #
         u_b = torch.from_numpy(self.u_b).float()[:, s_range]
