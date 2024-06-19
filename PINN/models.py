@@ -37,16 +37,23 @@ class MLP_surrogate(nn.Module):
     
     def forward(self, s, t) -> torch.Tensor:
         
+        # a lot of sanity check
+        if not isinstance(s, torch.Tensor):
+            s = torch.tensor(s, requires_grad=True)
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t, requires_grad=True)
+
         #  check input shape
-        if s.shape[-1] != 1:
-            s = s.unsqueeze(-1)
+        if len(t.shape) == len(s.shape)-1: 
+            # t is just flatten but s is high dimensional
+            t = t.unsqueeze(-1)
 
         if type(t) == int:
             t = torch.full_like(s, fill_value=t, device=s.device, requires_grad=s.requires_grad)
         if t.shape[-1] != 1:
             t = t.unsqueeze(-1)
 
-        assert s.shape == t.shape, "make sure s and t has the same shape"
+        assert len(s.shape) == len(t.shape), "make sure s and t has the same shape"
         input = torch.cat([s,t], dim=-1)
 
         out = self.u_theta(input)
@@ -61,7 +68,9 @@ class CubicSpline(nn.Module):
         super().__init__()
         
         if x is None:
-            x = np.linspace(0,1,n_knot)
+            x = np.linspace(0,1,n_knot) #.reshape(n_knot,-1)
+        # if len(x.shape) == 1:
+        #     x = x.reshape(x.shape[0], -1)
         
         if y is None:
             y = torch.from_numpy(np.random.randn(n_knot,)).float()
@@ -103,7 +112,8 @@ class CubicSpline(nn.Module):
         xs: x inside small interval, cell state in our case
         t : real time, but used in CubicSpine interpolate
         """
-        
+        if not isinstance(xs, torch.Tensor):
+            xs = torch.tensor(xs).float()
         
         # slope 
         m = (self.y[1:] - self.y[:-1]) / (self.x[1:] - self.x[:-1])
@@ -121,10 +131,60 @@ class CubicSpline(nn.Module):
              hh[3] * m[idxs + 1] * dx
 
         return cs
+
+class MultiDim_CubicSpline(nn.Module):
+    def __init__(self, y, x=None, n_knot=None):
+        """
+        High dimensional Cubic Spline with independent knots per dimension
+        x : the coordinate space
+        y : 2-d array/tensor values of the initial knots
+        """
+        super().__init__()
+        # sanity check
+        if x is None:
+            x = np.linspace(0,1, y.shape[0]) #.reshape(n_knot,-1)
+
+        if not isinstance(y, torch.Tensor):
+            y = torch.tensor(y).float()
+
+        # sanity check
+        assert len(y.shape) == 2,  "for MultiDim CubicSpline the initital y must be 2-d shape : [#knots, #dimensions]"
+        assert y.shape[0] == x.shape[0] , "the number of anchor knots is not consistent between x and y"
+
+        # define cublic spline for each column
+        # Splines = []
+        self.Splines = nn.ModuleList([])
+        for d2 in range(y.shape[1]):
+            self.Splines.append(CubicSpline(y=y[:,d2], x=x, n_knot=y.shape[0]))
+
+        # self.Splines = nn.ModuleList(Splines)
+        
     
+    def forward(self, xs, t=None)->torch.Tensor:
+        """
+        Interpoloate for each axis of xs
+        
+        Arguments
+        ------
+        xs : [ndarray, tensor], high dimensional cell state spanning from 0 to 1 in each dimension
+
+        Return:
+        ys : tensor, interpolated y for each axis independently
+        """
+
+        assert len(xs.shape) == 2, 'Input xs must be 2-dim shape : [#points, #dimensions]'
+
+
+        # forward the 1dim Cubic Spline for each dim
+        ys = []
+        for d2 in range(xs.shape[1]):
+            ys_d2 = self.Splines[d2](xs[:, d2], t)      # out of the dimension
+            ys.append(ys_d2.reshape(-1,1))              # make it 2dim for stacking
+        return torch.cat(ys, axis=1)
+        
     
 class Cspline_PINN(PINN_base):
-    def __init__(self, *, n_knot=9, **kwargs):
+    def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
         """
         The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
@@ -140,23 +200,36 @@ class Cspline_PINN(PINN_base):
         """
         super().__init__(**kwargs)
         # super().__init__(u=u, n_grid=n_grid, lr=lr, optim_class=optim_class, schedule_lr=schedule_lr)
-        
-        if n_knot == 9:
-            vy = torch.from_numpy(np.array([-2,-2,-2,-2,-2,-4,-4,-10,-12])).float()
-        else:
-            vy = -2*torch.ones(n_knot)
-            vy[-2] = -10
-            vy[-1] = -12
-            
+        self.n_dim = n_dim
 
-        self.D = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
-        self.v = CubicSpline(y = vy, n_knot=n_knot)
-        self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+        # 1 brach system
+        if n_dim == 1:
 
-        # parameters.guess = [parD*ones(9,1);-2;-2;-2;-2;-2;-4;-4;-10;-12;parA*ones(9,1)]
-        # parameters.min = [-10.3616*ones(1,9),-11.5129*ones(1,9),-6*ones(1,9)];
-        # parameters.max = [0*ones(1,9),0*ones(1,9),5*ones(1,9)];
-        
+            if n_knot == 9:
+                vy = torch.from_numpy(np.array([-2,-2,-2,-2,-2,-4,-4,-10,-12])).float()
+            else:
+                vy = -2*torch.ones(n_knot)
+                vy[-2] = -10
+                vy[-1] = -12
+                
+            self.D = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+            self.v = CubicSpline(y = vy, n_knot=n_knot)
+            self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+
+        else:    # multi-brach system
+            if n_knot == 9:
+                v_init_base = [-2,-2,-2,-2,-2,-4,-4,-10,-12]
+                vy = torch.from_numpy(np.array([v_init_base]*n_dim).T).float()
+            else:
+                vy = -2*torch.ones(n_knot)
+                vy[-2] = -10
+                vy[-1] = -12
+                
+            self.D = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
+            self.v = MultiDim_CubicSpline(y = vy, n_knot=n_knot)
+            self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
+
+
 
 class Cspline_symKLD(Cspline_PINN):
     def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=None):

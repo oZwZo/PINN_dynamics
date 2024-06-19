@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from torch import autograd
 import pytorch_lightning as pl
 from typing import Any, Union, Callable
 
@@ -87,6 +88,17 @@ class PINN_base(pl.LightningModule):
         """
         u = self.u(s,t)
         return u - u.min(axis=1)[0].view(-1,1)
+
+    def trace_div(self, f, s):
+        """
+        Calculates the Divergence : which is the trace of the Jacobian df/ds.
+        Stolen from: https://github.com/rtqichen/ffjord/blob/master/lib/layers/odefunc.py#L13
+        """
+        sum_diag = 0.
+        for i in range(s.shape[1]):
+            sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True)[0].contiguous()[:, i].contiguous()
+
+        return sum_diag.contiguous()
     
     def formular(self, s, t) -> tuple:
         """
@@ -134,7 +146,7 @@ class PINN_base(pl.LightningModule):
         u = self.u(s,t)
         D = self.D(s,t)
         v = self.v(s,t)
-        g = self.g(s,t)
+        g = self.g(s,t) # d- dim
         
         # left : ∂u/∂t
         lhs = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
@@ -143,10 +155,18 @@ class PINN_base(pl.LightningModule):
         duds = torch.autograd.grad(u.sum(), s, create_graph=True)[0]
         
         # the second order deviritives of density u to cell state : ∂^2u/∂s^2
+        #  ∂/∂s (D*∂u/∂s)
         u_ss = torch.autograd.grad(duds.sum(), s, create_graph=True)[0]
         
         # right hand side
-        rhs = torch.mul(D, u_ss) + torch.mul(v, duds) + torch.mul(g, u)
+        if len(v.shape) == 1:
+            # for one trajectory system
+            rhs = torch.mul(D, u_ss) + torch.mul(v, duds) + torch.mul(g, u)
+        else:
+            # for multi-dimensiona data
+            rhs = self.trace_div(torch.mul(D, duds), s) + \
+                    self.trace_div(torch.mul(v, u.unsqueeze(-1)), s) +  \
+                        torch.mul(g.sum(dim=1), u)
         
         return lhs, rhs
 
@@ -235,7 +255,10 @@ class PINN_base(pl.LightningModule):
         t_col = t_col.squeeze().float()
 
         t_b = torch.einsum('ijk->jki', t_b).float()      # change dimension
-        s_all = torch.einsum('ijk->jki', s_all).float()  # (1, T, n_grid) -> (T, n_grid, 1)
+
+        s_all = s_all.squeeze(dim=0).float() if len(s_all.shape) == 4 else torch.einsum('ijk->jki', s_all).float()
+        # if cell state has higher dimension
+        # (1, T, n_grid) -> (T, n_grid, 1)
 
         # reguires_grad
         if requires_grad:
@@ -337,3 +360,23 @@ class PINN_base(pl.LightningModule):
         Var = Var.detach().numpy().flatten()
 
         return u_pred_b, N_theta
+
+def batch_jacobian(func, x, create_graph=False):
+    """
+    compute the jacobian matrix
+    """
+    def _func_sum(x):
+        return func(x).sum(dim=0)
+    return autograd.functional.jacobian(_func_sum, x, create_graph=create_graph).permute(1, 0, 2)
+
+def batch_hessian(func, x):
+    """
+    compute the hessian matrix
+    """
+    jacobian = batch_jacobian(func, x, create_graph=True)
+    hessians = []
+    for i in range(jacobian.size(1)):
+        grad = autograd.grad(jacobian[:, i].sum(), x, create_graph=True, retain_graph=True)[0]
+        hessians.append(grad.unsqueeze(1))
+    return torch.cat(hessians, dim=1)
+

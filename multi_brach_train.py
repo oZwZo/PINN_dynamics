@@ -25,7 +25,7 @@ parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="Step", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
-parser.add_argument("--channels", type=str, required=False, default="2,32,32,1", help='the depth and width of the model')
+parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
 
 
@@ -58,9 +58,6 @@ train_DL = DataLoader(train_DS, batch_size=1, num_workers=20, shuffle=True)
                             #     define model     #
                             ###                  ###
 
-# define neural network surrogate
-channels = [int(c) for c in args.channels.split(",")]   
-u_theta = models.MLP_surrogate(channels = [2,32,1], activation_fn='Tanh')
 
 # pseudo dynamics model
 if args.schedule_lr == 'StepLR':
@@ -75,7 +72,7 @@ elif args.schedule_lr == 'CosineAnnealingLR':
 elif args.schedule_lr == 'CosineAnnealingWarmRestarts':
     schedule_lr = partial(lr_scheduler.CosineAnnealingWarmRestarts, T_0 = 3)
 
-elif args.schedule_lr in dir(torch.optim.lr_sceduler):
+elif args.schedule_lr in dir(torch.optim.lr_scheduler):
     # suitable for some sch like `LinearLR` `PolynomialLR`
     schedule_lr = eval("lr_sceduler%s" %args.schedule_lr)
 
@@ -93,12 +90,16 @@ else:
     # pass the String
     schedule_lr = args.schedule_lr
 
+
+# define neural network surrogate
+channels = [int(c) for c in args.channels.split(",")]   
+u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_knot=9, lr=args.lr, schedule_lr=schedule_lr)
+Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_dim=2, n_knot=9, lr=args.lr, schedule_lr=schedule_lr)
 
 if args.pretrained is not None:
     assert os.path.exists(args.pretrained), "pretrained weights not found"
-    Pdyn_model = models.Cspline_PINN.load_from_checkpoint(args.pretrained)
+    Pdyn_model = Model_Class.load_from_checkpoint(args.pretrained)
 
 
                             ###                     ###
@@ -118,7 +119,7 @@ tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
-                    # fast_dev_run=True,
+                    fast_dev_run=True,
                     default_root_dir=pth_save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
