@@ -309,7 +309,9 @@ class PINN_base(pl.LightningModule):
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
         self.log("total_loss", Loss_total, on_epoch=True)
-        self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
+
+        if self.schedule_lr != "False":
+            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
         
         return Loss_total
 
