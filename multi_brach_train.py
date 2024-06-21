@@ -25,7 +25,7 @@ parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
-parser.add_argument("--nearby_cellstate", type=int, required=False, default=0, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--nearby_cellstate", type=int, required=False, default=10, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
 
@@ -50,7 +50,7 @@ if not os.path.exists(save_path):
 
 train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
 
-batch_size = 50 if args.nearby_cellstate == 0 else 1
+batch_size = 50 if args.nearby_cellstate == 1 else 1
 train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=20, shuffle=True)
 
 
@@ -123,7 +123,8 @@ tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
 trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
-                    #fast_dev_run=False,
+                    # fast_dev_run=True,
+                    gradient_clip_val=0.5,
                     default_root_dir=pth_save_path,
                     logger=tb_logger,
                     devices = [gpu_device],

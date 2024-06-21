@@ -164,7 +164,7 @@ class PINN_base(pl.LightningModule):
             rhs = torch.mul(D, u_ss) + torch.mul(v, duds) + torch.mul(g, u)
         else:
             # for multi-dimensiona data
-            rhs = self.trace_div(torch.mul(D, duds), s) + \
+            rhs = torch.bmm(D.unsqueeze(1), u_ss.unsqueeze(-1)).squeeze() + \
                     self.trace_div(torch.mul(v, u.unsqueeze(-1)), s) +  \
                         torch.mul(g.sum(dim=1), u)
         
@@ -254,9 +254,9 @@ class PINN_base(pl.LightningModule):
         s_col = s_col.squeeze().float()
         t_col = t_col.squeeze().float()
 
-        t_b = torch.einsum('ijk->jki', t_b).float()      # change dimension
+        t_b = t_b.squeeze(dim=0).float() if len(t_b.shape) == 4 else t_b  # change dimension
 
-        s_all = s_all.squeeze(dim=0).float() if len(s_all.shape) == 4 else torch.einsum('ijk->jki', s_all).float()
+        s_all = s_all.squeeze(dim=0).float() if len(s_all.shape) == 4 else s_all # torch.einsum('ijk->jik', s_all).float()
         # if cell state has higher dimension
         # (1, T, n_grid) -> (T, n_grid, 1)
 
@@ -267,10 +267,10 @@ class PINN_base(pl.LightningModule):
             s_all.requires_grad = True
             t_b.requires_grad = True
 
-        Mean = Mean[0].float() if len(Mean.shape) == 3 else Mean.T.float()
+        Mean = Mean.squeeze(0).float() if Mean.shape[0] == 1 else Mean.squeeze(-1).float()
         Var = Var.T.float()
 
-        return s_col, t_col, s_all, t_b, u_b.squeeze(), Mean, Var
+        return s_col, t_col, s_all, t_b, u_b, Mean, Var
 
     def compute_loss(self, batch_data):
         """
@@ -301,7 +301,8 @@ class PINN_base(pl.LightningModule):
         """
         Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
         
-        Loss_total = Loss_r + Loss_b + Loss_p
+
+        Loss_total = Loss_b + Loss_p + Loss_r 
         # Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
         # Loss_total =  Loss_r + Loss_b + Loss_p + Loss_k # 
         

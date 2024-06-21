@@ -50,8 +50,8 @@ class MLP_surrogate(nn.Module):
 
         if type(t) == int:
             t = torch.full_like(s, fill_value=t, device=s.device, requires_grad=s.requires_grad)
-        if t.shape[-1] != 1:
-            t = t.unsqueeze(-1)
+        # if t.shape[-1] != 1:
+        #     t = t.unsqueeze(-1)
 
         assert len(s.shape) == len(t.shape), "make sure s and t has the same shape"
         input = torch.cat([s,t], dim=-1)
