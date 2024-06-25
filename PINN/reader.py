@@ -5,7 +5,22 @@ from . import functions as myfn
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
  
-class Pdyn_ExtractDataset(Dataset):
+#TODO: complete AnnDataset
+class Pdyn_AnnDataset(Dataset):
+    
+    def __init__(self, AnnData, Meta):
+        """
+        PINN-dynamics Dataset
+        """
+        
+    def __len__(self):
+        raise NotImplementederror
+    
+    def __getitem(self, i):
+        raise NotImplementederror
+
+
+class Processed_baseDS(Dataset):
     
     def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
         """
@@ -25,13 +40,6 @@ class Pdyn_ExtractDataset(Dataset):
             D['pop']['mean'] = np.log(mu)
             D['pop']['var'] = D['pop']['var']/ mu
 
-            # if np.max(D['pop']['t']) >= 30:
-            #     D['pop']['raw_t'] = D['pop']['t']
-            #     D['pop']['t'] =  np.log(np.where(D['pop']['t']==0, 1, D['pop']['t']))
-                
-            #     D['ind']['tp'] = np.array(D['ind']['tp'])
-            #     D['ind']['raw_tp'] = D['ind']['tp']
-            #     D['ind']['tp'] = np.log(np.where(D['ind']['tp']==0, 1, D['ind']['tp']))
         ###
         # set up params
         ### 
@@ -43,6 +51,22 @@ class Pdyn_ExtractDataset(Dataset):
         ###
         n_grid = n_grid
         self.n_grid = n_grid
+
+class Pdyn_ExtractDataset(Processed_baseDS):
+    
+    def __init__(self, Data_pt, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True):
+        """
+        PINN-dynamics Dataset using the pre-extracted data.   
+        This dataset returns full cell state (0-1) for each mini-batch
+        
+        Augment
+        --------
+        Data_pt : the output file path from script
+        """
+        super().__init__(Data_pt, n_grid=n_grid, collocation_points=collocation_points, n_repeat=n_repeat, log_transform=log_transform)
+        # load the result
+        D = torch.load(Data_pt)
+
         s = np.linspace(0, 1, n_grid)
         self.s = torch.from_numpy(s)
         h_inv = (1 / (s[1] - s[0]))
@@ -145,7 +169,7 @@ class Random_ExtractDataset(Pdyn_ExtractDataset):
 
 
 
-class MeshGrid_DS(Dataset):
+class MeshGrid_DS(Processed_baseDS):
     
     def __init__(self, Data_pt, nearby_cellstate=10, n_grid=300, collocation_points=600, n_repeat=10, log_transform=True, norm_time=True):
         """
@@ -157,28 +181,14 @@ class MeshGrid_DS(Dataset):
         Data_pt : the output file path from script
         nearby_cellstate : the number of near (cell state)
         """
-        super().__init__()
+        super().__init__(Data_pt, n_grid=n_grid, collocation_points=collocation_points, n_repeat=n_repeat, log_transform=log_transform)
         # load the result
         D = torch.load(Data_pt)
-        
-        if log_transform:
-            mu = np.array(D['pop']['mean'])
-            D['pop']['mean'] = np.log(mu)
-            D['pop']['var'] = D['pop']['var']/ mu
-
-        ###
-        # set up params
-        ### 
-        self.n_repeat = n_repeat
-        self.N_coll = collocation_points
-        self.nearby_cellstate = nearby_cellstate
-
         self.n_dim = D['ind']['hist'][0].shape[1]
 
         ###
         # create grided cell state
         ###
-        self.n_grid = n_grid
         coords = [np.linspace(0.01, 0.99, n_grid) for i in range(self.n_dim)]  # generate 1D uniform coord
         meshgrid = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
 
@@ -252,20 +262,3 @@ class MeshGrid_DS(Dataset):
             u_b = u_b.squeeze(1)
         
         return s_col, t_col, s_all, t_b, u_b, mean, var
-
-
-
-        
-#TODO: complete AnnDataset
-class Pdyn_AnnDataset(Dataset):
-    
-    def __init__(self, AnnData, Meta):
-        """
-        PINN-dynamics Dataset
-        """
-        
-    def __len__(self):
-        raise NotImplementederror
-    
-    def __getitem(self, i):
-        raise NotImplementederror
