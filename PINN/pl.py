@@ -23,6 +23,8 @@ def load_model():
 
 def behavior_curves(model, n_grid=300):
 
+    #TODO: extend to high-dimensional
+
     s = np.linspace(0, 1, n_grid)
     grid_ts = torch.from_numpy(s)
 
@@ -55,8 +57,10 @@ def behavior_curves(model, n_grid=300):
     return fig, axs
 
 
-def density_by_time(u_b, u_pred_b, train_DS):
-
+def density_by_time(u_b, u_pred_b, train_DS, cellstate='cell state'):
+    """
+    u_b
+    """
     fig, axs = plt.subplots(1,2,figsize=(8,3), dpi=300)
     cell_state = np.linspace(0,1,u_b.shape[1])
     
@@ -89,11 +93,78 @@ def density_by_time(u_b, u_pred_b, train_DS):
             axs[i].set_ylabel("density")
 
     axs[0].legend()
-    axs[-2].set_xlabel('cell state')
-    axs[-1].set_xlabel('cell state')
+    axs[-2].set_xlabel(cellstate)
+    axs[-1].set_xlabel(cellstate)
 
     return fig, axs
 
+def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', cellstate_2='cellstate2', fig_kws=None):
+    r"""
+    Visualize the observed and predicted 2D mesh grid density
+
+    Augments:
+    ---------
+    ub : [array, tensor], the observed density
+    ub_pred : array, tensor], density predicted by `u_theta`
+    train_DS : [Dataset], the Training Dataset defined in PINN.reader, 
+    cellstate_[1/2] : the label of the axis
+    fig_kws : dict|None , the keyword augments to control the layout and other params of the subplots
+
+    Returns
+    ---------
+    fig, axs : the matplotlib figure and subplot-axis
+
+    Example
+    ---------
+    >>>ad = ery_mk_ad = sc.read_h5ad("<XXX>.h5ad")
+    >>>train_DS = PINN.reader.MeshGrid_AnnDS(*args, **kwargs)
+    >>>model = PINN.models.Cspline_PINN.load_from_checkpoint(*args, **kwargs)
+
+    """
+    # getting experimental info from training Dataset
+    n_grid = train_DS.n_grid
+    ndays = len(train_DS.popD['t'])
+
+    # getting cell state coordinates
+    s = train_DS.s.numpy()   
+    XX = s[:,0].reshape(n_grid,n_grid)    # in DS, meshgrid is flatten
+    YY = s[:,1].reshape(n_grid,n_grid)
+
+    # type check
+    if isinstance(ub, torch.Tensor):
+        ub = ub.detach().numpy()
+    if isinstance(ub_pred, torch.Tensor):
+        ub_pred = ub_pred.detach().numpy()
+
+    
+    # subplot panels
+    if fig_kws is None:
+        fig_kws = { "figsize":(3*ndays,5),
+                    "gridspec_kw":{'wspace':0.4, 'hspace':0.4}}    
+        
+    fig, axs = plt.subplots(2, ndays,  **fig_kws)
+
+    for i, T in enumerate(train_DS.popD['t']):
+        
+        # XX and YY is the output of meshgird
+        # Z is of shape 50, 50
+        Z_ub = ub[i].reshape(n_grid, n_grid)
+        axs[0,i].contour(XX,YY, Z_ub, cmap='Blues')
+
+        Z_pred = ub_pred[i].reshape(n_grid, n_grid)
+        axs[1,i].contour(XX,YY, Z_pred, cmap='Blues')
+
+        # set title
+        axs[0,i].set_title("Day %d\n\nobserved density" %T)
+        axs[1,i].set_title("predicted density")
+
+        # set x and y label
+        axs[0,i].set_xlabel(cellstate_1)
+        axs[0,i].set_ylabel(cellstate_2)
+        axs[1,i].set_xlabel(cellstate_1)
+        axs[1,i].set_ylabel(cellstate_2)  
+    
+    return fig, axs
 
 
 def predict_and_vis(model, data_batch, train_DS, curveplot=True, densityplot=True, return_pred=True):

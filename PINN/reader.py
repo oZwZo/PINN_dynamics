@@ -131,9 +131,10 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         # create grided cell state
         ###
         coords = [np.linspace(0.01, 0.99, self.n_grid) for i in range(self.n_dim)]  # generate 1D uniform coord
-        meshgrid = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
+        self.meshgrid = np.meshgrid(*coords)
+        meshgrid_flat = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
 
-        self.s = torch.from_numpy(meshgrid).float()
+        self.s = torch.from_numpy(meshgrid_flat).float()
         h_inv = 1/np.prod([s[1] - s[0] for s in coords])
 
         if norm_time:
@@ -156,8 +157,8 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
             cellstate_t = ad_t.obsm[self.cellstate_key]
             
             density_fun = gaussian_kde(cellstate_t.T)
-            u  = density_fun(meshgrid.T)
-            # u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid)
+            u  = density_fun(meshgrid_flat.T)
+            # u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid_flat)
             n_exp = self.popD['n_lib'][tb_idx]
                     
             ub_ls.append(u / h_inv)
