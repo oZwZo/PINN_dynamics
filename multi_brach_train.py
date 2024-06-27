@@ -1,6 +1,7 @@
 import os, argparse, typing
 import numpy as np
 import pandas as pd
+import scanpy as sc
 import torch 
 from torch import nn
 from torch.utils.data import DataLoader
@@ -19,6 +20,7 @@ from PINN import functions as fns
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
 parser.add_argument("-D", "--dataset", type=str, required=False, default="HSPC_clu7", help='the name of the dataset, can be found under folder data')
+parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="cellstate", help='the obsm key on which we represent cell and compute density')
 parser.add_argument("-M", "--model", type=str, required=False, default="Cspline_PINN", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
@@ -35,20 +37,25 @@ args = parser.parse_args()
                                 ###               ###
 
 path = os.path.abspath(".")
-pt_path = os.path.join(path, f'{args.dataset}.pt')
+h5_path = os.path.join(path, f'{args.dataset}.h5ad')
 
-if not os.path.exists(pt_path):
+if not os.path.exists(h5_path):
     main_path = path
-    pt_path = os.path.join(path, f'data/{args.dataset}.pt')
+    h5_path = os.path.join(path, f'data/{args.dataset}.h5ad')
 else:
     main_path = os.path.dirname(path)
 
-save_path = os.path.join(main_path, 'logs', args.dataset)
+save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_multiBnch")
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 
-train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
+# train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
+
+ery_mk_ad = sc.read_h5ad(h5_path)
+train_DS = reader.MeshGrid_AnnDS(AnnData=ery_mk_ad, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+                                    n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, 
+                                    collocation_points=300, n_repeat=10)
 
 batch_size = 50 if args.nearby_cellstate == 1 else 1
 train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=20, shuffle=True)
@@ -116,8 +123,8 @@ device = 'cpu' if args.gpu_devices == None else 'gpu'
 gpu_device = args.gpu_devices
 
 # logger and checkpoints
-pth_save_path = os.path.join(main_path, "logs", f"{args.dataset}/{args.model}_RandMiniB/")
-tb_logger = pl_loggers.TensorBoardLogger(save_dir=pth_save_path)
+
+tb_logger = pl_loggers.TensorBoardLogger(save_dir=save_path)
 
 # trainer
 trainer = pl.Trainer(
@@ -125,7 +132,7 @@ trainer = pl.Trainer(
                     accelerator=device,
                     # fast_dev_run=True,
                     gradient_clip_val=0.5,
-                    default_root_dir=pth_save_path,
+                    default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
                     max_epochs=300,

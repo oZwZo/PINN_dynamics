@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import pandas as pd
 from . import functions as myfn
+from scipy.stats import gaussian_kde
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
  
@@ -25,18 +26,20 @@ class AnnDataset(Dataset):
         """
         super().__init__()
         self.adata = AnnData
+        self.cellstate_key = cellstate_key
+        self.timepoint_key = timepoint_key
 
         # check cell state
         assert cellstate_key in AnnData.obsm_keys(),  f'cellstate key `{cellstate_key}` not found in adata'
         assert timepoint_key in AnnData.obs_keys(),  f'timepoint key `{timepoint_key}` not found in adata'
 
-        self.adata_tb = self.adata.obs[timepoint_key]
-        self.cellstate = self.adata.obsm[cellstate_key]
+        self.adata_tb = self.adata.obs[timepoint_key]          # pd.Series
+        self.cellstate = self.adata.obsm[cellstate_key]        # np.values
         self.n_dim = self.cellstate.shape[1] # the dimension of the cell states
 
         # check poppulation
         if pop_dict is None:
-            assert ['pop'] in self.adata.uns, "please provide the cell population data"
+            assert 'pop' in self.adata.uns, "please provide the cell population data"
             self.popD = self.adata.uns['pop']   # population Dict
         else:
             self.popD = pop_dict
@@ -121,6 +124,7 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         """
         super().__init__(**kwargs)
         self.n_repeat = n_repeat
+        self.nearby_cellstate = nearby_cellstate
     
 
         ###
@@ -145,8 +149,16 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         
         for tb_idx, t_b in enumerate(self.popD['t']):
             
-            # quantify the cell densitied at grided s
-            u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid)
+            # subset ad_t
+            
+            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
+            ad_t = self.adata[cb_t].copy()
+            cellstate_t = ad_t.obsm[self.cellstate_key]
+            
+            density_fun = gaussian_kde(cellstate_t.T)
+            u  = density_fun(meshgrid.T)
+            # u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid)
+            n_exp = self.popD['n_lib'][tb_idx]
                     
             ub_ls.append(u / h_inv)
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
