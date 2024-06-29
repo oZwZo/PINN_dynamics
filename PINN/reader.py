@@ -40,7 +40,7 @@ class AnnDataset(Dataset):
         # check poppulation
         if pop_dict is None:
             assert 'pop' in self.adata.uns, "please provide the cell population data"
-            self.popD = self.adata.uns['pop']   # population Dict
+            self.popD = self.adata.uns['pop'].copy()   # population Dict
         else:
             self.popD = pop_dict
 
@@ -73,36 +73,94 @@ class OneBranch_AnnDS(AnnDataset):
 class MeshGrid(Dataset):
     def __init__(self):
         super().__init__()
+        self.s = None
+        self.meshs = None
+        self.n_grid = None
+        self.nearby_cellstate =None
+        self.u_b = None
+        self.mesh_ub = None
 
     def __len__(self):
         # repeat sampling for 10 times
         return self.s.shape[0] - self.nearby_cellstate
+
+
+    def resampling_by_density(self, n_samples):
+        """
+        sample meshes by the time-averaged density distribution
+        """
+        
+        try:  # detect density distribution 
+            self.density_P
+        except AttributeError:
+            # create the distribution 
+            ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
+            self.density_P = np.mean(self.u_b/ub_norm, axis=0) # (n_grid**2, )
+        
+        # sample idx by their mean density over time
+        idxs = np.random.choice(np.arange(0, self.s.shape[0]), size=n_samples, p=self.density_P)
+        return idxs
+    
+    def indexing_mesh(self, i):
+        """
+        given a sample index i in the flatten s, return the location in mesh-grid S
+        """
+        ix = i//self.n_grid
+        iy = i%self.n_grid
+        return ix, iy
+
+    def indexing_flatten(self, ix, iy):
+        """
+        given a sample index i in the flatten s, return the location in mesh-grid S
+        """
+        return ix*self.n_grid + iy
+
+    def indexing_neighbormesh(self, i, neighborhood=None):
+        """
+        looking for the index of neighbor mesh in a square , given bottom left index 1.
+        
+        """
+        if neighborhood is None:
+            neighborhood = self.nearby_cellstate
+        
+        squares = []
+        ix, iy = self.indexing_mesh(i)   # locate square in mesh s 
+
+        ix_end = min(ix+neighborhood, self.n_grid)  # right bound
+        iy_end = min(iy+neighborhood, self.n_grid)  # up bound
+
+        for ixx in range(ix, ix_end):
+            for iyy in range(iy, iy_end):
+                squares.append(self.indexing_flatten(ixx, iyy))
+        return squares
+        
+        
 
     def __getitem__(self, i):
         """
         there is no mini-batch, each item returns the full collocation points
         """ 
 
-        s_range = slice(i, i + self.nearby_cellstate)
+        square_idx = self.indexing_neighbormesh(i, self.nearby_cellstate)
+        # s_range = slice(i, i + self.nearby_cellstate)
 
         # random collocation points across the s and t domain
-        s_col = self.s.clone().detach().float()[s_range,:]
-        t_col = torch.Tensor(self.nearby_cellstate,1).uniform_(min(self.T_b), max(self.T_b)).float()
+        s_col = torch.Tensor(self.N_coll,self.n_dim).uniform_(0.01, 0.99).float()
+        t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b)).float()
         
-        t_b = torch.from_numpy(self.t_b).float()[:, s_range].unsqueeze(-1)
-        s_bund = self.s.clone().detach().float()[s_range, :]
+        t_b = torch.from_numpy(self.t_b).float()[:, square_idx].unsqueeze(-1)
+        s_bund = self.s.clone().detach().float()[square_idx, :]
 
         bc_shape = [t_b.shape[0]] + list(s_bund.shape)  # broadcast to
         s_bund = s_bund.broadcast_to(bc_shape).float()
 
         #
-        u_b = torch.from_numpy(self.u_b).float()[:, s_range] + 1e-30
+        u_b = torch.from_numpy(self.u_b[:, square_idx]).float()
         # u_b = np.where(u_b==0, u_b.min(), u_b)
         mean = 0.5*(u_b[:,1:]+u_b[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
 
         # mean = torch.from_numpy(self.pop_mean).float()
         var = torch.from_numpy(self.pop_var).float()
-
 
         # for nearby_cellstate == 1
         if self.nearby_cellstate == 1:
@@ -131,10 +189,11 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         # create grided cell state
         ###
         coords = [np.linspace(0.01, 0.99, self.n_grid) for i in range(self.n_dim)]  # generate 1D uniform coord
-        self.meshgrid = np.meshgrid(*coords)
         meshgrid_flat = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
 
         self.s = torch.from_numpy(meshgrid_flat).float()
+        # self.meshs = self.s.reshape(self.n_grid,self.n_grid, -1) # from flatten to squared high-dim
+
         h_inv = 1/np.prod([s[1] - s[0] for s in coords])
 
         if norm_time:
@@ -156,16 +215,18 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
             ad_t = self.adata[cb_t].copy()
             cellstate_t = ad_t.obsm[self.cellstate_key]
             
+            # assess density and return 
             density_fun = gaussian_kde(cellstate_t.T)
             u  = density_fun(meshgrid_flat.T)
-            # u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid_flat)
             n_exp = self.popD['n_lib'][tb_idx]
                     
-            ub_ls.append(u / h_inv)
+            ub_ls.append(u / h_inv * self.popD['mean'][tb_idx])
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
         
-        self.u_b = np.vstack(ub_ls)  # (tb, n_grid)
+
+        self.u_b = np.vstack(ub_ls) *  + 1e-30  # (tb, n_grid**2)
+        # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
         self.t_b = np.vstack(tb_ls)
         
         # observeds
@@ -174,7 +235,23 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.T_b = self.popD['t']         # (tb,)
         self.T_b = T_b
 
-    
+
+class MeshGrid_Resample(MeshGrid_AnnDS):
+    def __init__(self, *args, **kwargs):
+        """
+        the MeshGrid dataset with resampling trick
+        """
+        super().__init__(*args, **kwargs)
+
+    def __len__(self):
+        # repeat sampling for 10 times
+        return self.s.shape[0] * self.n_repeat
+
+    def __getitem__(self, i):
+
+        resampled_i = self.resampling_by_density(1).item() if i > self.s.shape[0] else i
+
+        return super().__getitem__(resampled_i)
 
 
 class Processed_baseDS(Dataset):
