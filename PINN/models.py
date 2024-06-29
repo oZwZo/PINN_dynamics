@@ -230,6 +230,41 @@ class Cspline_PINN(PINN_base):
             self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
 
 
+class Cspline_woPL(Cspline_PINN):
+    def __init__(self, *args, **kwargs):
+        """
+        The Cspline PINN model with out population loss
+        
+        Agument
+        -------
+        The same arguments as Cspline_PINN
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        """
+        super().__init__(*args, **kwargs)
+
+    def training_step(self, train_batch, index):
+        """
+        log individual loss term and them combine then into total loss
+        """
+        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+        
+        Loss_total = Loss_b +  Loss_r  # only two loss is used here
+        
+        self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
+
+        if self.schedule_lr != "False":
+            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
+        
+        return Loss_total
+
 
 class Cspline_symKLD(Cspline_PINN):
     def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=None):
