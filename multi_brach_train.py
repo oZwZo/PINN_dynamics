@@ -45,7 +45,7 @@ if not os.path.exists(h5_path):
 else:
     main_path = os.path.dirname(path)
 
-save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_multiBnch")
+save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_multiBnch", args.model)
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
@@ -53,12 +53,12 @@ if not os.path.exists(save_path):
 # train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
 
 ery_mk_ad = sc.read_h5ad(h5_path)
-train_DS = reader.MeshGrid_AnnDS(AnnData=ery_mk_ad, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+train_DS = reader.MeshGrid_Resample(AnnData=ery_mk_ad, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                     n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, 
-                                    collocation_points=300, n_repeat=10)
+                                    collocation_points=300, n_repeat=2)
 
 batch_size = 50 if args.nearby_cellstate == 1 else 1
-train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=20, shuffle=True)
+train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True)
 
 
                             ###                  ###
@@ -69,8 +69,8 @@ train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=20, shuffle=T
 if args.schedule_lr == 'StepLR':
     schedule_lr = partial(lr_scheduler.StepLR, step_size  = 100 , gamma = 0.5)
 
-elif args.schedule_lr == 'CycleLR':
-    schedule_lr = partial(lr_scheduler.CycleLR, base_lr=args.lr, max_lr=5*args.lr)
+elif args.schedule_lr == 'CyclicLR':
+    schedule_lr = partial(lr_scheduler.CyclicLR, base_lr=args.lr, max_lr=10*args.lr)
 
 elif args.schedule_lr == 'CosineAnnealingLR':
     schedule_lr = partial(lr_scheduler.CosineAnnealingLR, T_max = 100)
@@ -142,4 +142,4 @@ trainer = pl.Trainer(
 
 # start training
 Pdyn_model.train()
-trainer.fit(Pdyn_model, train_DL)
+trainer.fit(Pdyn_model, train_DL, ckpt_path = args.pretrained)
