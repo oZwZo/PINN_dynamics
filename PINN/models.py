@@ -255,6 +255,17 @@ class Cspline_woPL(Cspline_PINN):
         
         Loss_total = Loss_b +  Loss_r  # only two loss is used here
         
+        
+        # if Loss_total < 1e-6:
+        #     Loss_total *= 1000
+        # if Loss_total < 1e-5:
+        #     Loss_total *= 100
+        # elif Loss_total < 1e-4:
+        #     Loss_total *= 10
+        # elif Loss_total < 1e-3:
+        #     Loss_total *= 2
+        
+        
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)

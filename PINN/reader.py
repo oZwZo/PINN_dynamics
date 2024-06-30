@@ -85,20 +85,24 @@ class MeshGrid(Dataset):
         return self.s.shape[0] - self.nearby_cellstate
 
 
-    def resampling_by_density(self, n_samples):
+    def resampling_by_density(self, n_samples, p=None):
         """
         sample meshes by the time-averaged density distribution
         """
-        
-        try:  # detect density distribution 
-            self.density_P
-        except AttributeError:
-            # create the distribution 
-            ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
-            self.density_P = np.mean(self.u_b/ub_norm, axis=0) # (n_grid**2, )
+        if p is None:
+            
+            try:  # detect density distribution 
+                self.density_P
+            except AttributeError:
+                # create the distribution 
+                ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
+                self.density_P = self.u_b/ub_norm
+
+            p = np.mean(self.density_P, axis=0) # (n_grid**2, )
+
         
         # sample idx by their mean density over time
-        idxs = np.random.choice(np.arange(0, self.s.shape[0]), size=n_samples, p=self.density_P)
+        idxs = np.random.choice(np.arange(0, self.s.shape[0]), size=n_samples, p=p)
         return idxs
     
     def indexing_mesh(self, i):
@@ -123,11 +127,16 @@ class MeshGrid(Dataset):
         if neighborhood is None:
             neighborhood = self.nearby_cellstate
         
+        bound = self.n_grid - self.nearby_cellstate
+        
         squares = []
         ix, iy = self.indexing_mesh(i)   # locate square in mesh s 
 
+        ix = ix if ix < bound else bound            # left bound
+        iy = iy if iy < bound else bound            # bottom
         ix_end = min(ix+neighborhood, self.n_grid)  # right bound
         iy_end = min(iy+neighborhood, self.n_grid)  # up bound
+        
 
         for ixx in range(ix, ix_end):
             for iyy in range(iy, iy_end):
@@ -228,12 +237,17 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.u_b = np.vstack(ub_ls) *  + 1e-30  # (tb, n_grid**2)
         # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
         self.t_b = np.vstack(tb_ls)
+
+        # norm_p
+        ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
+        self.density_P = self.u_b/ub_norm
         
         # observeds
         self.pop_var = np.array(var_ls)  # (tb,)
         self.pop_mean = self.popD['mean'] # (tb,)
         self.T_b = self.popD['t']         # (tb,)
         self.T_b = T_b
+
 
 
 class MeshGrid_Resample(MeshGrid_AnnDS):
@@ -245,11 +259,17 @@ class MeshGrid_Resample(MeshGrid_AnnDS):
 
     def __len__(self):
         # repeat sampling for 10 times
-        return self.s.shape[0] * self.n_repeat
+        return self.s.shape[0] * (len(self.T_b)  + 1)
 
     def __getitem__(self, i):
+        
+        tb_i = i // self.s.shape[0] - 1
+        tb_p = self.density_P[tb_i]
 
-        resampled_i = self.resampling_by_density(1).item() if i > self.s.shape[0] else i
+        if tb_i >= 0:
+            resampled_i = self.resampling_by_density(1,p=self.density_P[tb_i]).item()
+        else:
+            resampled_i = i
 
         return super().__getitem__(resampled_i)
 
