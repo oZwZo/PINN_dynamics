@@ -181,7 +181,32 @@ class MultiDim_CubicSpline(nn.Module):
             ys_d2 = self.Splines[d2](xs[:, d2], t)      # out of the dimension
             ys.append(ys_d2.reshape(-1,1))              # make it 2dim for stacking
         return torch.cat(ys, axis=1)
+
+class MLP(pl.LightningModule):
+    """
+    MLP surrogate wrap by Lightning Module    
+    """
+    def __init__(self, *, lr, **kwargs):
+        super().__init__()
+        self.model = MLP_surrogate(**kwargs)
+        self.lr = lr
+        self.loss_fn = nn.MSELoss(reduction='sum')
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        return optimizer
+
+    def forward(self, s, t):
+        return self.model(s, t)
+    
+    def training_step(self, train_batch, index):
+        s,t, u = train_batch
+        u_pred = self.model(s,t)
         
+        Total_loss = self.loss_fn(u.squeeze(), u_pred.squeeze())
+
+        self.log("total_loss", Total_loss, on_epoch=True)
+        return Total_loss
     
 class Cspline_PINN(PINN_base):
     def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
@@ -276,6 +301,42 @@ class Cspline_woPL(Cspline_PINN):
         
         return Loss_total
 
+
+class Cspline_bo(Cspline_PINN):
+    def __init__(self, *args, **kwargs):
+        """
+        The Cspline PINN model with boundary loss only
+        
+        Agument
+        -------
+        The same arguments as Cspline_PINN
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        """
+        super().__init__(*args, **kwargs)
+
+    def training_step(self, train_batch, index):
+        """
+        log individual loss term and them combine then into total loss
+        """
+        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+        
+        Loss_total = Loss_b 
+        
+        
+        self.log("residual_loss", Loss_r, on_epoch=True)
+        self.log("boundary_loss", Loss_b, on_epoch=True)
+        self.log("population_loss", Loss_p, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True)
+
+        if self.schedule_lr != "False":
+            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
+        
+        return Loss_total
 
 class Cspline_symKLD(Cspline_PINN):
     def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=None):
