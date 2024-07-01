@@ -90,7 +90,7 @@ class MeshGrid(Dataset):
         sample meshes by the time-averaged density distribution
         """
         if p is None:
-            
+
             try:  # detect density distribution 
                 self.density_P
             except AttributeError:
@@ -102,7 +102,9 @@ class MeshGrid(Dataset):
 
         
         # sample idx by their mean density over time
-        idxs = np.random.choice(np.arange(0, self.s.shape[0]), size=n_samples, p=p)
+
+        a = np.arange(0, self.s.shape[0])
+        idxs = np.random.choice(a, size=n_samples, p=p)
         return idxs
     
     def indexing_mesh(self, i):
@@ -234,7 +236,7 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
         
 
-        self.u_b = np.vstack(ub_ls) *  + 1e-30  # (tb, n_grid**2)
+        self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid**2)
         # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
         self.t_b = np.vstack(tb_ls)
 
@@ -246,9 +248,8 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.pop_var = np.array(var_ls)  # (tb,)
         self.pop_mean = self.popD['mean'] # (tb,)
         self.T_b = self.popD['t']         # (tb,)
-        self.T_b = T_b
-
-
+        self.T_b = T_b    
+    
 
 class MeshGrid_Resample(MeshGrid_AnnDS):
     def __init__(self, *args, **kwargs):
@@ -272,6 +273,58 @@ class MeshGrid_Resample(MeshGrid_AnnDS):
             resampled_i = i
 
         return super().__getitem__(resampled_i)
+
+class MeshGrid_logDS(MeshGrid_Resample):
+    def __init__(self, *args, **kwargs):
+        """
+        Two branch system using mesh grid to span the all cell state space
+
+        Augment
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+        """
+        super().__init__(*args, **kwargs)
+        self.u_b = np.log(self.u_b[:4])
+
+        # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
+        self.t_b = self.t_b[:4]
+
+        # norm_p
+        ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
+        self.density_P = self.u_b/ub_norm
+        
+        # observeds
+        self.pop_var = self.pop_var[:4]  # (tb,)
+        self.pop_mean = self.pop_mean[:4] # (tb,)
+        self.T_b = self.T_b[:4]         # (tb,)
+
+class Simple_DS(MeshGrid_AnnDS):
+    
+    def __init__(self, *, n_timepoint, **kwargs):
+        """
+        only use the a specific time point
+        """
+        super().__init__(**kwargs)
+
+        self.spec_t = self.T_b[:n_timepoint]
+
+        self.u_b = torch.from_numpy(self.u_b[:n_timepoint].flatten()).float()
+        # self.u_b = torch.log(self.u_b)
+        self.t_b = torch.from_numpy(self.t_b[:n_timepoint].flatten().reshape(-1,1)).float()
+        self.s = torch.concat([self.s]*len(range(0, n_timepoint)), dim=0).float()
+        scaled_P = self.density_P[:n_timepoint].flatten() ** 0.8
+        self.density_P = scaled_P / scaled_P.sum()
+
+    def __len__(self):
+        return self.u_b.shape[0]
+
+    def __getitem__(self, i):
+
+        i = self.resampling_by_density(1, p=self.density_P)
+
+        return self.s[i], self.t_b[i], self.u_b[i]
 
 
 class Processed_baseDS(Dataset):
