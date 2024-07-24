@@ -53,7 +53,10 @@ if not os.path.exists(save_path):
 # train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
 
 ery_mk_ad = sc.read_h5ad(h5_path)
-train_DS = reader.MeshGrid_Resample(AnnData=ery_mk_ad, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+
+# MeshGrid_Resample
+# MeshGrid_logDS
+train_DS = reader.MeshGrid_logDS(AnnData=ery_mk_ad, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                     n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, 
                                     collocation_points=300, n_repeat=2)
 

@@ -308,14 +308,17 @@ class Simple_DS(MeshGrid_AnnDS):
         """
         super().__init__(**kwargs)
 
-        self.spec_t = self.T_b[:n_timepoint]
+        self.T_b = self.T_b[:n_timepoint]
 
         self.u_b = torch.from_numpy(self.u_b[:n_timepoint].flatten()).float()
         # self.u_b = torch.log(self.u_b)
         self.t_b = torch.from_numpy(self.t_b[:n_timepoint].flatten().reshape(-1,1)).float()
         self.s = torch.concat([self.s]*len(range(0, n_timepoint)), dim=0).float()
-        scaled_P = self.density_P[:n_timepoint].flatten() ** 0.8
-        self.density_P = scaled_P / scaled_P.sum()
+        scaled_P = self.density_P[:n_timepoint].flatten() ** 0.5
+        self.density_P = scaled_P / scaled_P.sum() 
+
+        for key in self.popD:
+            self.popD[key] = self.popD[key][:n_timepoint]
 
     def __len__(self):
         return self.u_b.shape[0]
