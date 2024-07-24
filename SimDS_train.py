@@ -30,6 +30,7 @@ parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
+parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of time point to train the model')
 parser.add_argument("--batch_size", type=int, required=False, default=10, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
@@ -48,7 +49,7 @@ if not os.path.exists(h5_path):
 else:
     main_path = os.path.dirname(path)
 
-save_path = os.path.join(main_path, 'logs', "Simple_DS_MLP", "MLP")
+save_path = os.path.join(main_path, 'logs', f"Simple_DS_{args.model}_n{args.n_timepoint}")
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
@@ -56,14 +57,17 @@ if not os.path.exists(save_path):
 ery_mk_ad = sc.read_h5ad(h5_path)
 channels = [int(c) for c in args.channels.split(",")]   
 
-model = models.MLP(
-    lr=3e-4,
-    channels = channels,
-    activation_fn='Tanh'
-)
+if args.pretrained is not None:
+    model = models.MLP.load_from_checkpoint(args.pretrained)
+else:
+    model = models.MLP(
+        lr=3e-4,
+        channels = channels,
+        activation_fn='Tanh'
+    )
 
-train_DS =  Simple_DS(n_timepoint = 3, AnnData=ery_mk_ad, cellstate_key='Actb_Kcnn4_scaled_S',
-                                    n_grid=args.n_grid,   # nearby cell state is not used 
+train_DS =  reader.Simple_DS(n_timepoint = args.n_timepoint, AnnData=ery_mk_ad, cellstate_key='Actb_Kcnn4_scaled_S',
+                                    n_grid=args.n_grid,  nearby_cellstate=3, # nearby cell state is not used 
                                     collocation_points=300, n_repeat=2)
 
 train_DL = DataLoader(train_DS, batch_size=args.batch_size, shuffle=True, num_workers=20)
@@ -72,17 +76,14 @@ device = 'gpu' if torch.cuda.is_available() else 'cpu'
 device = 'cpu' if args.gpu_devices == None else 'gpu'
 gpu_device = args.gpu_devices
 
-logs_dir = "/ssd/users/Wergillius/Project/PINN_dynamics/logs"
-save_path = f"{logs_dir}/Simple_DS_MLP"
-
 trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
-                    gradient_clip_val=0.5,
+                    # gradient_clip_val=0.5,
                     default_root_dir=save_path,
-                    devices = [gpu_device],
-                    max_epochs=300,
+                    devices = [gpu_device], 
+                    max_epochs=3000,
                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                 monitor="total_loss", mode="min", save_top_k=2)]
                     )

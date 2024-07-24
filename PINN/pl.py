@@ -6,6 +6,7 @@ from . import models
 from .reader import Pdyn_ExtractDataset
 from . import functions  as myfun
 from matplotlib import pyplot as plt
+import matplotlib.animation as animation
 from matplotlib import cm
 
 
@@ -126,7 +127,10 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
     ndays = len(train_DS.popD['t'])
 
     # getting cell state coordinates
-    s = train_DS.s.numpy()   
+    if train_DS.s.shape[0] == train_DS.t_b.shape[0]:
+        s = train_DS.s[:n_grid*n_grid].numpy()   
+    else:
+        s = train_DS.s.numpy()   
     XX = s[:,0].reshape(n_grid,n_grid)    # in DS, meshgrid is flatten
     YY = s[:,1].reshape(n_grid,n_grid)
 
@@ -138,9 +142,13 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
 
     
     # subplot panels
+    fig_kws_base = { "figsize":(3*ndays,5),
+                    "gridspec_kw":{'wspace':0.4, 'hspace':0.4}}  
     if fig_kws is None:
-        fig_kws = { "figsize":(3*ndays,5),
-                    "gridspec_kw":{'wspace':0.4, 'hspace':0.4}}    
+        fig_kws =  fig_kws_base
+    else:
+        fig_kws_base.update(fig_kws)
+        fig_kws = fig_kws_base
         
     fig, axs = plt.subplots(2, ndays,  **fig_kws)
 
@@ -159,7 +167,7 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
         axs[1,i].set_title("predicted density")
 
         # set x and y label
-        axs[0,i].set_xlabel(cellstate_1)
+        # axs[0,i].set_xlabel(cellstate_1)
         axs[0,i].set_ylabel(cellstate_2)
         axs[1,i].set_xlabel(cellstate_1)
         axs[1,i].set_ylabel(cellstate_2)  
@@ -212,3 +220,39 @@ def evaluate_behavior_for_cell(ad, model, dpt_key='dpt_pseudotime'):
     # sc.pl.umap(ad, colors=['PINN_v','PINN_g', 'PINN_D'])
 
     return ad
+
+
+def contour_animation(s, continous_u , save_path, fps=5):
+
+    """
+    animation of density contour change by time
+    s: nparray, (ngrid**2, 2) , s from train_DS
+    continous_u : nparray, (n_timepoints, ngrid**2)
+    save_path : str
+    """
+    fig , ax = plt.subplots(1,1, dpi=300)
+    ax.set_xlim(0,1)         
+    ax.set_ylim(0,1)
+
+    n_grid = 50
+
+    XX = s[:,0].reshape(n_grid,n_grid)    # in DS, meshgrid is flatten
+    YY = s[:,1].reshape(n_grid,n_grid)
+
+    def init():
+        Z_ub = continous_u[0].reshape(n_grid, n_grid)
+        ax.contour(XX,YY, Z_ub, cmap='Blues')
+        ax.set_title("Day 0")
+
+    def run(data):
+        if data>0:
+            ax.clear()   
+            t = np.arange(0, continous_u.shape[0])[data]
+            Z_ub = continous_u[data].reshape(n_grid, n_grid)
+            ax.contour(XX,YY, Z_ub, cmap='Blues')
+            ax.set_title("Day %d"%t)
+        else:
+            pass
+
+    ani = animation.FuncAnimation(fig, run, frames=continous_u.shape[0], interval=10, init_func=init)  # 製作動畫
+    ani.save(save_path, fps=fps, writer='pillow') 

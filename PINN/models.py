@@ -12,7 +12,6 @@ class MLP_surrogate(nn.Module):
     def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
 
         super().__init__()
-
         ### activation function check
         if type(activation_fn) == str:
             assert activation_fn in dir(nn), "invalid activation function, please check `https://pytorch.org/docs/stable/nn.html`"
@@ -188,6 +187,7 @@ class MLP(pl.LightningModule):
     """
     def __init__(self, *, lr, **kwargs):
         super().__init__()
+        self.save_hyperparameters()
         self.model = MLP_surrogate(**kwargs)
         self.lr = lr
         self.loss_fn = nn.MSELoss(reduction='sum')
@@ -205,9 +205,19 @@ class MLP(pl.LightningModule):
         
         Total_loss = self.loss_fn(u.squeeze(), u_pred.squeeze())
 
-        self.log("total_loss", Total_loss, on_epoch=True)
+        self.log("total_loss", Total_loss, on_epoch=True, prog_bar=True)
         return Total_loss
-    
+
+
+
+class MLP_exp(MLP):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, s, t):
+        base = self.model(s, t)
+        return torch.exp(base)
+
 class Cspline_PINN(PINN_base):
     def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
         """
