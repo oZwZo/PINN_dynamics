@@ -3,7 +3,7 @@ from denmarf import DensityEstimate
 import numpy as np
 
 
-save_dir = "/ssd/users/Wergillius/Project/PINN_dynamics/Explore_Notebook/density"
+save_dir = "/ssd/users/Wergillius/Project/PINN_dynamics/Explore_Notebook/density/denmarf_pickle"
 
 
 DM_ay = np.load('/ssd/users/Wergillius/Project/PINN_dynamics/data/mkery_DM10.npy', allow_pickle=True)
