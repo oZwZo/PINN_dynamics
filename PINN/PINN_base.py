@@ -9,7 +9,7 @@ from typing import Any, Union, Callable
 
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, *, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False, **kwargs):
+    def __init__(self, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
         """
         u_theta : the neural netowrk surrogate of u
         

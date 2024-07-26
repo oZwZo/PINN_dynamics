@@ -19,6 +19,7 @@ class AnnDataset(Dataset):
         cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
         timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
         pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
 
         Returns:
         ----------
@@ -59,6 +60,29 @@ class AnnDataset(Dataset):
         ###
         n_grid = n_grid
         self.n_grid = n_grid
+
+    def resampling_by_density(self, n_samples, p=None):
+        """
+        sample meshes by the time-averaged density distribution
+        """
+        if p is None:
+
+            try:  # detect density distribution 
+                self.density_P
+            except AttributeError:
+                # create the distribution 
+                ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_grid**2)
+                self.density_P = self.u_b/ub_norm
+
+            p = np.mean(self.density_P, axis=0) # (n_grid**2, )
+
+        
+        # sample idx by their mean density over time
+
+        a = np.arange(0, self.s.shape[0])
+        idxs = np.random.choice(a, size=n_samples, p=p)
+        return idxs
+    
 
 
 class OneBranch_AnnDS(AnnDataset):
