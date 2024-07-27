@@ -4,7 +4,7 @@ import pandas as pd
 from . import functions as myfn
 from scipy.stats import gaussian_kde
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from .Dataset_base import AnnDataset, MeshGrid, Processed_baseDS
+from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 # from Dataset_base 
  
                                 ##################################
@@ -43,7 +43,7 @@ class HigDim_AnnDS(AnnDataset):
         # as it tells what are the possible points of the entire cell state space 
         cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension]
         self.s = torch.from_numpy(cellstate).float()
-        self.s = torch.cat([self.s]*len(self.popD['t']))
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
     
 
         if norm_time:
@@ -70,8 +70,10 @@ class HigDim_AnnDS(AnnDataset):
             density_fun = gaussian_kde(cellstate_t.T)
             u  = density_fun(cellstate.T)   # evaluate with the entire space
             n_exp = self.popD['n_lib'][tb_idx]
+
+            u = u / u.sum()
                     
-            ub_ls.append(u * 10**n_dimension * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
+            ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
             density_funs.append(density_fun)
@@ -86,7 +88,7 @@ class HigDim_AnnDS(AnnDataset):
         scaled_P = self.density_P.flatten() ** 0.5
         self.density_P = scaled_P / scaled_P.sum() 
         
-        self.u_b = self.u_b.flatten()
+        self.u_b = torch.from_numpy(self.u_b.flatten()).float()
 
         
         # observeds
