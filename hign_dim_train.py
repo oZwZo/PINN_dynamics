@@ -106,14 +106,17 @@ else:
 
 
 # define neural network surrogate
+# ery_mk_ad = sc.read_h5ad(h5_path)
 channels = [int(c) for c in args.channels.split(",")]   
-u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
-Model_Class = eval(f"models.{args.model}")
-Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_dimension, n_dim=2, n_knot=9, lr=args.lr, schedule_lr=schedule_lr)
 
 if args.pretrained is not None:
-    assert os.path.exists(args.pretrained), "pretrained weights not found"
-    Pdyn_model = Model_Class.load_from_checkpoint(args.pretrained)
+    model = models.MLP.load_from_checkpoint(args.pretrained)
+else:
+    model = models.MLP(
+        lr=3e-4,
+        channels = channels,
+        activation_fn='Tanh'
+    )
 
 
                             ###                     ###
@@ -144,5 +147,5 @@ trainer = pl.Trainer(
                     )
 
 # start training
-Pdyn_model.train()
-trainer.fit(Pdyn_model, train_DL, ckpt_path = args.pretrained)
+model.train()
+trainer.fit(model, train_DL, ckpt_path = args.pretrained)
