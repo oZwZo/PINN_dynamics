@@ -56,7 +56,7 @@ ery_mk_ad = sc.read_h5ad(h5_path)
 
 # MeshGrid_Resample
 # MeshGrid_logDS
-train_DS = reader.HigDim_AnnDS(AnnData=ery_mk_ad, n_dimension = 5, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+train_DS = reader.HigDimRe_AnnDS(AnnData=ery_mk_ad, n_dimension = 5, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                      nearby_cellstate=args.nearby_cellstate, 
                                     collocation_points=300)
 
@@ -106,17 +106,22 @@ else:
 
 
 # define neural network surrogate
-# ery_mk_ad = sc.read_h5ad(h5_path)
-channels = [int(c) for c in args.channels.split(",")]   
 
-if args.pretrained is not None:
-    model = models.MLP.load_from_checkpoint(args.pretrained)
-else:
-    model = models.MLP(
-        lr=3e-4,
-        channels = channels,
-        activation_fn='Tanh'
-    )
+# if args.pretrained is not None:
+#     model = models.MLP.load_from_checkpoint(args.pretrained)
+# else:
+#     model = models.MLP(
+#         lr=3e-4,
+#         channels = channels,
+#         activation_fn='Tanh'
+#     )
+
+channels = [int(c) for c in args.channels.split(",")]   
+u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
+Model_Class = eval(f"models.{args.model}")
+model = Model_Class(u=u_theta, n_dim=5, 
+                         n_knot=9, lr=args.lr, 
+                         schedule_lr=schedule_lr)
 
 
                             ###                     ###

@@ -42,6 +42,8 @@ class HigDim_AnnDS(AnnDataset):
         # use the cell state key of the entire dataset 
         # as it tells what are the possible points of the entire cell state space 
         cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension]
+        self.cellstate = cellstate
+
         self.s = torch.from_numpy(cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
     
@@ -112,6 +114,34 @@ class HigDim_AnnDS(AnnDataset):
 
         return self.s[i], self.t_b[i], self.u_b[i]
 
+
+
+class HigDimRe_AnnDS(HigDim_AnnDS):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.s_std = self.cellstate.std(axis=0)
+
+
+    def __getitem__(self, index):
+        
+        # boundary points
+        i = self.resampling_by_density(1, p=self.density_P)
+        s_bon = self.s[i]      
+        t_bon = self.t_b[i]
+        u_bon = self.u_b[i]
+
+        # collocalization point
+        err = np.random.randn()
+        i_col = np.random.choice(range(len(self.cellstate)))
+        s_col = self.cellstate[i_col] + err * self.s_std
+        s_col = torch.from_numpy(s_col).float()
+
+        t_col = np.random.randint(self.popD['t'].min(), self.popD['t'].max())
+        t_col = torch.tensor([t_col]).float()
+
+        return  s_col, t_col, s_bon.squeeze(), t_bon, u_bon
+    
                                 ################################
                                 ## Trajectory Dependent  DS   ##
                                 ################################

@@ -9,7 +9,7 @@ from typing import Any, Union, Callable
 
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
+    def __init__(self, u:nn.Module , lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
         """
         u_theta : the neural netowrk surrogate of u
         
@@ -26,18 +26,18 @@ class PINN_base(pl.LightningModule):
         
         # PDE discretization
         self.schedule_lr = schedule_lr
-        self.n_grid = n_grid
-        grid = np.linspace(0, 1, n_grid)
-        self.grid = grid
-        h_inv = (1 / (grid[1] - grid[0]))
+        # self.n_grid = n_grid
+        # grid = np.linspace(0, 1, n_grid)
+        # self.grid = grid
+        # h_inv = (1 / (grid[1] - grid[0]))
         
-        # interval ∆s := s[i+1] - s[i]
-        grid_s = np.linspace(grid[0] + (grid[1] - grid[0]) / 2, grid[-2] + (grid[-1] - grid[-2]) / 2, n_grid - 1)
-        self.grid_s = torch.from_numpy(grid_s)
+        # # interval ∆s := s[i+1] - s[i]
+        # grid_s = np.linspace(grid[0] + (grid[1] - grid[0]) / 2, grid[-2] + (grid[-1] - grid[-2]) / 2, n_grid - 1)
+        # self.grid_s = torch.from_numpy(grid_s)
         
         # inverse interval
-        self.register_buffer("h_inv", torch.tensor(h_inv, dtype=torch.float32, requires_grad=False))
-        self.register_buffer("h2inv", torch.tensor(h_inv**2, dtype=torch.float32, requires_grad=False))
+        # self.register_buffer("h_inv", torch.tensor(h_inv, dtype=torch.float32, requires_grad=False))
+        # self.register_buffer("h2inv", torch.tensor(h_inv**2, dtype=torch.float32, requires_grad=False))
         
         
         # optimization and loss
@@ -309,7 +309,7 @@ class PINN_base(pl.LightningModule):
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True, prog_bar=True)
 
         if self.schedule_lr != "False":
             self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
@@ -351,7 +351,6 @@ class PINN_base(pl.LightningModule):
 
         s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch, False)
 
-        grid_s = np.linspace(0,1,s_all.shape[1])
 
         # predict
         u_pred_b = self.u(s_all, t_b)

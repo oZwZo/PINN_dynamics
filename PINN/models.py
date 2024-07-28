@@ -263,6 +263,52 @@ class Cspline_PINN(PINN_base):
             self.D = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
             self.v = MultiDim_CubicSpline(y = vy, n_knot=n_knot)
             self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
+        
+    def get_data(self, data_batch, requires_grad=True):
+        s_col, t_col, s_bon, t_bon, u_bon = data_batch
+
+        s_col = s_col.squeeze().float()
+        t_col = t_col.squeeze().float()
+
+        t_bon = t_bon.squeeze(dim=0).float() if len(t_bon.shape) == 4 else t_bon  # change dimension
+
+        s_bon = s_bon.squeeze(dim=0).float() if len(s_bon.shape) == 4 else s_bon # torch.einsum('ijk->jik', s_bon).float()
+        # if cell state has higher dimension
+        # (1, T, n_grid) -> (T, n_grid, 1)
+
+        # reguires_grad
+        if requires_grad:
+            s_col.requires_grad = True
+            t_col.requires_grad = True
+            s_bon.requires_grad = True
+            t_bon.requires_grad = True
+
+        return s_col, t_col, s_bon, t_bon, u_bon
+
+    def compute_loss(self, batch_data):
+        """
+        get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
+        """
+
+        Loss_p = 0
+        Loss_k = 0
+
+        s_col, t_col, s_bon, t_bon, u_bon = self.get_data(batch_data)
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_bon, t_bon)
+        Loss_b = self.boundary_loss(u_pred_b, u_bon)
+
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+        
+        return Loss_r, Loss_b, Loss_p, Loss_k
 
 
 class Cspline_woPL(Cspline_PINN):
