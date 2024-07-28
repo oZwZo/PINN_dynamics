@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
-from .PINN_base import PINN_base
+from ._PINN_base import PINN_base
 
 class MLP_surrogate(nn.Module):
     
@@ -185,10 +185,10 @@ class MLP(pl.LightningModule):
     """
     MLP surrogate wrap by Lightning Module    
     """
-    def __init__(self, *, lr, **kwargs):
+    def __init__(self, lr, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
         super().__init__()
         self.save_hyperparameters()
-        self.model = MLP_surrogate(**kwargs)
+        self.model = MLP_surrogate(channels=channels, activation_fn = activation_fn)
         self.lr = lr
         self.loss_fn = nn.MSELoss(reduction='sum')
 

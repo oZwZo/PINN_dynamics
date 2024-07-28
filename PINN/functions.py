@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
+from . import models
 
 
 def scale_dpt(dpt):
@@ -13,6 +14,15 @@ def scale_dpt(dpt):
     dpt_scaled = (dpt - dpt_min) / (dpt_max - dpt_min)
     
     return dpt_scaled
+
+def load_model(ckptvx):
+    r"""
+    from a given ckpt , load the MLP model
+    """
+    model_vx = models.MLP(lr=1e-4, channels=[6,32,32,1], activation_fn='Tanh')
+    ckpt = torch.load(ckptvx)
+    model_vx.load_state_dict(ckpt['state_dict'])
+    return model_vx
 
 def compute_guassian_u(Cellstate_ay, dimension=10):
     r"""

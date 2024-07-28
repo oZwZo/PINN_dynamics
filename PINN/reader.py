@@ -57,6 +57,7 @@ class HigDim_AnnDS(AnnDataset):
         tb_ls = []
         var_ls = []
         density_funs = []
+        cb_ls = []
 
         for tb_idx, t_b in enumerate(self.popD['t']):
             
@@ -76,11 +77,15 @@ class HigDim_AnnDS(AnnDataset):
             ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
+            cb_ls.append(cb_t)
             density_funs.append(density_fun)
 
         self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_cell)
         self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
         self.density_funs = density_funs
+
+        self.cb_ls = np.concatenate(cb_ls)
+        # self.adata = self.adata[cb_ls].copy()
 
         # norm_p
         ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_cell)
