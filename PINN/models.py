@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
-from ._PINN_base import PINN_base
+from ._PINN_base import PINN_base, PINN_base_sim
 
 class MLP_surrogate(nn.Module):
     
@@ -218,7 +218,28 @@ class MLP_exp(MLP):
         base = self.model(s, t)
         return torch.exp(base)
 
-class Cspline_PINN(PINN_base):
+
+class MLP_PINN(PINN_base_sim):
+    def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
+        """
+        The PINN that uses MLP to fit all the functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
+        
+        Agument
+        -------
+        u_channel : the number of MLP channels of the u function
+        curve_channel : the number of MLP channels of the CubicSpline function
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        """
+        super().__init__(**kwargs)
+
+
+
+class Cspline_PINN(PINN_base_sim):
     def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
         """
         The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
@@ -263,52 +284,8 @@ class Cspline_PINN(PINN_base):
             self.D = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
             self.v = MultiDim_CubicSpline(y = vy, n_knot=n_knot)
             self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
-        
-    def get_data(self, data_batch, requires_grad=True):
-        s_col, t_col, s_bon, t_bon, u_bon = data_batch
+    
 
-        s_col = s_col.squeeze().float()
-        t_col = t_col.squeeze().float()
-
-        t_bon = t_bon.squeeze(dim=0).float() if len(t_bon.shape) == 4 else t_bon  # change dimension
-
-        s_bon = s_bon.squeeze(dim=0).float() if len(s_bon.shape) == 4 else s_bon # torch.einsum('ijk->jik', s_bon).float()
-        # if cell state has higher dimension
-        # (1, T, n_grid) -> (T, n_grid, 1)
-
-        # reguires_grad
-        if requires_grad:
-            s_col.requires_grad = True
-            t_col.requires_grad = True
-            s_bon.requires_grad = True
-            t_bon.requires_grad = True
-
-        return s_col, t_col, s_bon, t_bon, u_bon
-
-    def compute_loss(self, batch_data):
-        """
-        get the data and compute the loss
-
-        Return
-        -------
-        residual loss
-        boundary loss
-        population loss
-        """
-
-        Loss_p = 0
-        Loss_k = 0
-
-        s_col, t_col, s_bon, t_bon, u_bon = self.get_data(batch_data)
-        
-        # predict at boundary time poits
-        u_pred_b = self.u(s_bon, t_bon)
-        Loss_b = self.boundary_loss(u_pred_b, u_bon)
-
-        # residual loss defied on collocation points
-        Loss_r = self.risidual_loss(s_col, t_col)
-        
-        return Loss_r, Loss_b, Loss_p, Loss_k
 
 
 class Cspline_woPL(Cspline_PINN):
@@ -336,21 +313,10 @@ class Cspline_woPL(Cspline_PINN):
         
         Loss_total = Loss_b +  Loss_r  # only two loss is used here
         
-        
-        # if Loss_total < 1e-6:
-        #     Loss_total *= 1000
-        # if Loss_total < 1e-5:
-        #     Loss_total *= 100
-        # elif Loss_total < 1e-4:
-        #     Loss_total *= 10
-        # elif Loss_total < 1e-3:
-        #     Loss_total *= 2
-        
-        
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True,prog_bar=True)
 
         if self.schedule_lr != "False":
             self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
@@ -387,7 +353,7 @@ class Cspline_bo(Cspline_PINN):
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True,prog_bar=True)
 
         if self.schedule_lr != "False":
             self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)

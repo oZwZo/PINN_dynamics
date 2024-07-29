@@ -363,6 +363,56 @@ class PINN_base(pl.LightningModule):
 
         return u_pred_b, N_theta
 
+class PINN_base_sim(PINN_base):
+    def __init__(self, u:nn.Module , lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
+        super().__init__(u=u, lr=lr, optim_class=optim_class, schedule_lr=schedule_lr)
+
+    def get_data(self, data_batch, requires_grad=True):
+        s_col, t_col, s_bon, t_bon, u_bon = data_batch
+
+        s_col = s_col.squeeze().float()
+        t_col = t_col.squeeze().float()
+
+        t_bon = t_bon.squeeze(dim=0).float() if len(t_bon.shape) == 4 else t_bon  # change dimension
+
+        s_bon = s_bon.squeeze(dim=0).float() if len(s_bon.shape) == 4 else s_bon # torch.einsum('ijk->jik', s_bon).float()
+        # if cell state has higher dimension
+        # (1, T, n_grid) -> (T, n_grid, 1)
+
+        # reguires_grad
+        if requires_grad:
+            s_col.requires_grad = True
+            t_col.requires_grad = True
+            s_bon.requires_grad = True
+            t_bon.requires_grad = True
+
+        return s_col, t_col, s_bon, t_bon, u_bon
+
+    def compute_loss(self, batch_data):
+        """
+        get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
+        """
+
+        Loss_p = 0
+        Loss_k = 0
+
+        s_col, t_col, s_bon, t_bon, u_bon = self.get_data(batch_data)
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_bon, t_bon)
+        Loss_b = self.boundary_loss(u_pred_b, u_bon)
+
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+        
+        return Loss_r, Loss_b, Loss_p, Loss_k
+
 def batch_jacobian(func, x, create_graph=False):
     """
     compute the jacobian matrix
@@ -381,4 +431,6 @@ def batch_hessian(func, x):
         grad = autograd.grad(jacobian[:, i].sum(), x, create_graph=True, retain_graph=True)[0]
         hessians.append(grad.unsqueeze(1))
     return torch.cat(hessians, dim=1)
+
+
 

@@ -14,7 +14,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_dimension=10, nearby_cellstate=10, norm_time=True, **kwargs):
+    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=10, norm_time=True, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -37,7 +37,14 @@ class HigDim_AnnDS(AnnDataset):
         
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
+        self.n_timepoint = n_timepoint
+        self.popD['t'] = self.popD['t'][:n_timepoint]
 
+        # subset the adata
+        if n_timepoint is not None:
+            t_max = self.popD['t'].max()
+            cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
+            self.adata = self.adata[cbs]
 
         # use the cell state key of the entire dataset 
         # as it tells what are the possible points of the entire cell state space 
@@ -102,7 +109,7 @@ class HigDim_AnnDS(AnnDataset):
         self.pop_var = np.array(var_ls)  # (tb,)
         self.pop_mean = self.popD['mean'] # (tb,)
         self.T_b = self.popD['t']         # (tb,)
-        self.T_b = T_b    
+
 
     def __len__(self):
         return self.s.shape[0] 
