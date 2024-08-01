@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
+from . import models
 
 
 def scale_dpt(dpt):
@@ -13,6 +14,52 @@ def scale_dpt(dpt):
     dpt_scaled = (dpt - dpt_min) / (dpt_max - dpt_min)
     
     return dpt_scaled
+
+def load_model(ckptvx):
+    r"""
+    from a given ckpt , load the MLP model
+    """
+    model_vx = models.MLP(lr=1e-4, channels=[6,32,32,1], activation_fn='Tanh')
+    ckpt = torch.load(ckptvx)
+    model_vx.load_state_dict(ckpt['state_dict'])
+    return model_vx
+
+def compute_guassian_u(Cellstate_ay, dimension=10):
+    r"""
+    Estimating the density high dimensional cell state coordinates and its change by experimental time.
+    The density estimation function is 
+    
+    Input
+    -------
+    Cellstate_ay : ndarray of shape (N_cell, dimension), the high dimensional cell state representation, i.e. PC, Diffusion Map (DM) , SCVI-latent
+    dimension : control the nubmer of the first few dimension to use for density esitmation
+
+    Return
+    -------
+    gussian_kde_u : ndarray of shape (N_cell, 1), the density of each cell 
+
+    Example
+    ------
+    >>> timepoints = sorted(ad.obs.timepoint_tx_days.unique()) # get timepoints
+    >>> cbs_t = [ad.obs.query("`timepoint_tx_days` == @t").index for t in timepoints]
+    >>> DM_ay = [ad[cb].obsm['DM_eigen'] for cb in cbs_t]
+    >>> gussian_kde_u = guassian_u(DM_ay, dimension=5)
+    >>> ad.obs['DM5_gaussisn_u']= gussian_kde_u
+
+    """
+    gussian_kde_u = []
+
+    for m in Cellstate_ay:
+        # dimension truncated matrix
+        dm = m[:, :dimension].T  
+        
+        # take in [n_dim, n_sample]
+        kde_fn = gaussian_kde(dm, bw_method='silverman')       
+        gussian_kde_u.append(kde_fn(dm))
+
+    gussian_kde_u = np.concatenate(gussian_kde_u, axis=0)
+
+    return gussian_kde_u
 
 def boundary_density_at(D, t_b, x, density_fn:callable=None):
     """

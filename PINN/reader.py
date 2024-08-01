@@ -4,9 +4,154 @@ import pandas as pd
 from . import functions as myfn
 from scipy.stats import gaussian_kde
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from . import Dataset_base
-from Dataset_base import AnnDataset, MeshGrid, Processed_baseDS
+from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
+# from Dataset_base 
  
+                                ##################################
+                                ## Trajectory Independent  DS   ##
+                                ##################################
+
+
+
+class HigDim_AnnDS(AnnDataset):
+    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=10, norm_time=True, **kwargs):
+        r"""
+        High Dimensional Cell state Dataset for trajectory indepdent modeling
+
+        Augment
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+
+        Other params from AnnDataset:
+        --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+
+        """
+        super().__init__(**kwargs)
+        
+        self.n_dimension = n_dimension
+        self.nearby_cellstate = nearby_cellstate
+        self.n_timepoint = n_timepoint
+        self.popD['t'] = self.popD['t'][:n_timepoint]
+
+        # subset the adata
+        if n_timepoint is not None:
+            t_max = self.popD['t'].max()
+            cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
+            self.adata = self.adata[cbs]
+
+        # use the cell state key of the entire dataset 
+        # as it tells what are the possible points of the entire cell state space 
+        cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension]
+        self.cellstate = cellstate
+
+        self.s = torch.from_numpy(cellstate).float()
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
+    
+
+        if norm_time:
+            T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
+            T_b = T_b / T_b.max()
+        
+        ###
+        # set up boundary conditions
+        ### 
+        ub_ls = []
+        tb_ls = []
+        var_ls = []
+        density_funs = []
+        cb_ls = []
+
+        for tb_idx, t_b in enumerate(self.popD['t']):
+            
+            # subset ad_t
+            
+            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
+            ad_t = self.adata[cb_t].copy()
+            cellstate_t = ad_t.obsm[self.cellstate_key][:, :n_dimension]
+            
+            # assess density and return 
+            density_fun = gaussian_kde(cellstate_t.T)
+            u  = density_fun(cellstate.T)   # evaluate with the entire space
+            n_exp = self.popD['n_lib'][tb_idx]
+
+            u = u / u.sum()
+                    
+            ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
+            tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
+            var_ls.append(self.popD['var'][tb_idx] /n_exp)
+            cb_ls.append(cb_t)
+            density_funs.append(density_fun)
+
+        self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_cell)
+        self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
+        self.density_funs = density_funs
+
+        self.cb_ls = np.concatenate(cb_ls)
+        # self.adata = self.adata[cb_ls].copy()
+
+        # norm_p
+        ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_cell)
+        self.density_P = self.u_b/ub_norm                #TODO:check shape and the values
+        scaled_P = self.density_P.flatten() ** 0.5
+        self.density_P = scaled_P / scaled_P.sum() 
+        
+        self.u_b = torch.from_numpy(self.u_b.flatten()).float()
+
+        
+        # observeds
+        self.pop_var = np.array(var_ls)  # (tb,)
+        self.pop_mean = self.popD['mean'] # (tb,)
+        self.T_b = self.popD['t']         # (tb,)
+
+
+    def __len__(self):
+        return self.s.shape[0] 
+
+
+    def __getitem__(self, index):
+
+        i = self.resampling_by_density(1, p=self.density_P)
+
+        return self.s[i], self.t_b[i], self.u_b[i]
+
+
+
+class HigDimRe_AnnDS(HigDim_AnnDS):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.s_std = self.cellstate.std(axis=0)
+
+
+    def __getitem__(self, index):
+        
+        # boundary points
+        i = self.resampling_by_density(1, p=self.density_P)
+        s_bon = self.s[i]      
+        t_bon = self.t_b[i]
+        u_bon = self.u_b[i]
+
+        # collocalization point
+        err = np.random.randn()
+        i_col = np.random.choice(range(len(self.cellstate)))
+        s_col = self.cellstate[i_col] + err * self.s_std
+        s_col = torch.from_numpy(s_col).float()
+
+        t_col = np.random.randint(self.popD['t'].min(), self.popD['t'].max())
+        t_col = torch.tensor([t_col]).float()
+
+        return  s_col, t_col, s_bon.squeeze(), t_bon, u_bon
+    
+                                ################################
+                                ## Trajectory Dependent  DS   ##
+                                ################################
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
@@ -128,6 +273,10 @@ class MeshGrid_logDS(MeshGrid_Resample):
         self.pop_mean = self.pop_mean[:4] # (tb,)
         self.T_b = self.T_b[:4]         # (tb,)
 
+                                ########################
+                                ##     Sim DataSet    ##
+                                ########################
+
 class Simple_DS(MeshGrid_AnnDS):
     
     def __init__(self, *, n_timepoint, **kwargs):
@@ -157,6 +306,10 @@ class Simple_DS(MeshGrid_AnnDS):
 
         return self.s[i], self.t_b[i], self.u_b[i]
 
+
+                                ########################
+                                ##  Processed DataSet ##
+                                ########################
 
 
 class Pdyn_ExtractDataset(Processed_baseDS):

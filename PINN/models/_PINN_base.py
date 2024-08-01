@@ -9,7 +9,7 @@ from typing import Any, Union, Callable
 
 
 class PINN_base(pl.LightningModule):
-    def __init__(self, *, u:nn.Module , n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False, **kwargs):
+    def __init__(self, u:nn.Module , lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
         """
         u_theta : the neural netowrk surrogate of u
         
@@ -26,19 +26,6 @@ class PINN_base(pl.LightningModule):
         
         # PDE discretization
         self.schedule_lr = schedule_lr
-        self.n_grid = n_grid
-        grid = np.linspace(0, 1, n_grid)
-        self.grid = grid
-        h_inv = (1 / (grid[1] - grid[0]))
-        
-        # interval ∆s := s[i+1] - s[i]
-        grid_s = np.linspace(grid[0] + (grid[1] - grid[0]) / 2, grid[-2] + (grid[-1] - grid[-2]) / 2, n_grid - 1)
-        self.grid_s = torch.from_numpy(grid_s)
-        
-        # inverse interval
-        self.register_buffer("h_inv", torch.tensor(h_inv, dtype=torch.float32, requires_grad=False))
-        self.register_buffer("h2inv", torch.tensor(h_inv**2, dtype=torch.float32, requires_grad=False))
-        
         
         # optimization and loss
         self.lr = lr
@@ -82,7 +69,7 @@ class PINN_base(pl.LightningModule):
             return optimizer
             
     
-    def fowrard(self, s, t) -> torch.Tensor:
+    def forward(self, s, t) -> torch.Tensor:
         """
         use the neural network to evaluate the density 
         """
@@ -92,6 +79,9 @@ class PINN_base(pl.LightningModule):
     def trace_div(self, f, s):
         """
         Calculates the Divergence : which is the trace of the Jacobian df/ds.
+        f :  f(s), the output of a function
+        s :  s, the variable on which to calculating the derivitives
+
         Stolen from: https://github.com/rtqichen/ffjord/blob/master/lib/layers/odefunc.py#L13
         """
         sum_diag = 0.
@@ -99,8 +89,30 @@ class PINN_base(pl.LightningModule):
             sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True)[0].contiguous()[:, i].contiguous()
 
         return sum_diag.contiguous()
+
+    def mul(self, param, term):
+        """
+        own multiply function to deal with different dimension
+        """
+
+        # (bs, )  or (bs, n_dim)
+        if param.shape == term.shape:
+            prod = torch.mul(param, term)
     
-    def formular(self, s, t) -> tuple:
+        elif len(term.shape) == 1:
+            prod = torch.mul(param, term.unsqueeze(1))
+        
+        elif len(param.shape) == 1:
+            prod = torch.mul(param.unsqueeze(1), term)
+
+        if len(prod.shape) != 1:
+            prod = prod.sum(dim=1)
+
+        return prod
+        
+
+    
+    def equation(self, s, t) -> tuple:
         """
         Apply torch's auto grad to compute the 
         
@@ -115,7 +127,7 @@ class PINN_base(pl.LightningModule):
         g = self.g(s,t)
         
         # left : ∂u/∂t
-        lhs = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
         
         
         # the first order deviritives of density u to time : ∂u/∂s
@@ -130,11 +142,13 @@ class PINN_base(pl.LightningModule):
         dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] #TODO:check shape
         
         # right hand side
-        rhs = d2Dds2 + dvuds + torch.mul(g, u)
+        diffuse = d2Dds2
+        drift = dvuds 
+        growth = torch.mul(g, u)
         
-        return lhs, rhs
+        return dudt, growth, drift, diffuse
     
-    def simplified_formular(self, s, t) -> tuple:
+    def simplified_equation(self, s, t) -> tuple:
         """
         Apply torch's auto grad to compute the 
         
@@ -149,26 +163,94 @@ class PINN_base(pl.LightningModule):
         g = self.g(s,t) # d- dim
         
         # left : ∂u/∂t
-        lhs = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
         
         # the first order deviritives of density u to cell state : ∂u/∂s
         duds = torch.autograd.grad(u.sum(), s, create_graph=True)[0]
         
-        # the second order deviritives of density u to cell state : ∂^2u/∂s^2
-        #  ∂/∂s (D*∂u/∂s)
-        u_ss = torch.autograd.grad(duds.sum(), s, create_graph=True)[0]
         
         # right hand side
-        if len(v.shape) == 1:
-            # for one trajectory system
-            rhs = torch.mul(D, u_ss) + torch.mul(v, duds) + torch.mul(g, u)
-        else:
-            # for multi-dimensiona data
-            rhs = torch.bmm(D.unsqueeze(1), u_ss.unsqueeze(-1)).squeeze() + \
-                    self.trace_div(torch.mul(v, u.unsqueeze(-1)), s) +  \
-                        torch.mul(g.sum(dim=1), u)
+        if len(v.shape) == 1: # for one trajectory system
+            
+            # the second order deviritives of density u to cell state : ∂^2u/∂s^2
+            #  ∂/∂s (D*∂u/∂s)
+            u_ss = torch.autograd.grad(duds.sum(), s, create_graph=True)[0]
+
+        else:   # for multi-dimensiona data
+
+            # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
+            u_ss_ls  = []
+            for i in range(v.shape[1]):
+                du_dsisi = u_ss = torch.autograd.grad(duds[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                u_ss_ls.append(du_dsisi)
+            u_ss = torch.cat(u_ss_ls, dim=1)
+
+            g = g if len(g.shape) == 1 else g.sum(dim=1)
+
+            
+        diffuse = self.mul(D, u_ss)
+        drift = self.mul(v, duds)
+        growth = self.mul(g, u)
+                # self.trace_div(torch.mul(v, u.unsqueeze(-1)), s) +  \
+
+        return dudt, growth, drift, diffuse
+
+    def TIGON_equation(self, s, t) -> tuple:
+        """
+        Apply torch's auto grad to compute the 
         
-        return lhs, rhs
+        based on the following equation:
+            ∂u/∂t = g * u - ∇ (v * u)
+        
+        we calcuate the left hand side (lhs) and the right hand side
+        """
+        u = self.u(s,t)
+        # D = self.D(s,t)   # we wouldn't bother not having D
+        v = self.v(s,t)
+        g = self.g(s,t) # d- dim
+
+        if len(g.shape) > 1:
+            g = g.mean(dim=1)
+
+        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+
+        vu = v * u.reshape(-1, 1)   # (b, n_dim) * (b, 1)  -> (b, n_dim)
+
+        diffuse = 0
+        drift = self.trace_div(vu, s)
+
+        growth = g * u
+
+        return dudt, growth, drift, diffuse
+
+
+    def log_TIGON_equation(self, s, t) -> tuple:
+        """
+        Apply torch's auto grad to compute the 
+        
+        based on the following equation:
+            ∂log(u)/∂t = g - ∇ v 
+        
+        we calcuate the left hand side (lhs) and the right hand side
+        """
+        u = self.u(s,t)
+        # D = self.D(s,t)   # we wouldn't bother not having D
+        v = self.v(s,t)
+        g = self.g(s,t) # d- dim
+
+        if len(g.shape) > 1:
+            g = g.mean(dim=1)
+
+        dlnu_dt = torch.autograd.grad(torch.log(u).sum(), t, create_graph=True)[0]
+
+        vu = v * u.reshape(-1, 1)   # (b, n_dim) * (b, 1)  -> (b, n_dim)
+
+        diffuse = 0
+        drift = self.trace_div(vu, s)
+
+        growth = g * u
+
+        return dlnu_dt, growth, drift, diffuse
 
     # Area statistics
     def Area_loss(self, u_pred_b, u_b) -> torch.Tensor:
@@ -183,18 +265,21 @@ class PINN_base(pl.LightningModule):
         u_b = u_b + 1e-17
         p_b = (u_b)/ u_b.sum(axis=1,keepdim=True)
         
+        upred_dim = len(u_pred_b.shape)
+        agg_axis = 0 if upred_dim == 1 else 1
+
         # the probability of prediction : non-negative
-        u_pred_b = u_pred_b - u_pred_b.min(axis=1)[0].view(-1,1) + 1e-17
-        p_pred_b = u_pred_b / u_pred_b.sum(axis=1,keepdim=True)
+        u_pred_b = u_pred_b - u_pred_b.min(axis=agg_axis)[0].view(-1,1) + 1e-17
+        p_pred_b = u_pred_b / u_pred_b.sum(axis=agg_axis,keepdim=True)
         
         # prediction should be a distribution in the log space
         #.         y pred  ,  y_true
         L_kld = self.KLD_fn(p_pred_b.squeeze().log(), p_b.squeeze())
         
-        return L_kld.mean(axis=1).sum()
+        return L_kld.mean(axis=agg_axis).sum()
     
     
-    def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor:
+    def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor: 
         """
         the loss defined at boundary conditions: including initial conditions, boundary conditions
         
@@ -214,8 +299,9 @@ class PINN_base(pl.LightningModule):
         s: the cell state, 
         t: experimental time
         """
-        lhs, rhs = self.simplified_formular(s, t)
-        return self.SSE_fn(rhs.squeeze(), lhs.squeeze())
+        dudt, growth, drift, diffuse = self.simplified_equation(s, t)
+        rhs = growth + drift + diffuse
+        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
         
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
@@ -292,24 +378,22 @@ class PINN_base(pl.LightningModule):
         Loss_k = self.distribution_loss(u_pred_b, u_b)
         # residual loss defied on collocation points
         Loss_r = self.risidual_loss(s_col, t_col)
+
+        Loss_total = Loss_b + Loss_p + Loss_r 
         
-        return Loss_r, Loss_b, Loss_p, Loss_k
+        return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
 
     def training_step(self, train_batch, index):
         """
         log individual loss term and them combine then into total loss
         """
-        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
-        
-
-        Loss_total = Loss_b + Loss_p + Loss_r 
-        # Loss_total = Loss_r + Loss_k  + Loss_p # replace boundary with KLD
-        # Loss_total =  Loss_r + Loss_b + Loss_p + Loss_k # 
+        Loss_total, Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
+    
         
         self.log("residual_loss", Loss_r, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True, prog_bar=True)
 
         if self.schedule_lr != "False":
             self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
@@ -321,26 +405,16 @@ class PINN_base(pl.LightningModule):
     
     def validation_step(self, val_batch, index):
         
-        s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(val_batch, requires_grad=False)
+        Loss_total, Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(val_batch)
     
-        # predict at boundary time poits
-        u_pred_b = self.u(s_all, t_b)
-        
-        Loss_b = self.boundary_loss(u_pred_b, u_b.squeeze())
-        Loss_k = self.distribution_loss(u_pred_b, u_b)
-        Loss_p = self.population_loss(u_pred_b, Mean, Var)
-    
-        # residual loss defied on collocation points
-        # Loss_r = self.risidual_loss(s_col, t_col)
-        Loss_r = 20
-        
-        Loss_total = Loss_k + Loss_b + Loss_p
         
         self.log("residual_loss", Loss_r, on_epoch=True)
-        self.log("distribution_loss", Loss_k, on_epoch=True)
         self.log("boundary_loss", Loss_b, on_epoch=True)
         self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        self.log("total_loss", Loss_total, on_epoch=True, prog_bar=True)
+
+        if self.schedule_lr != "False":
+            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
 
         return Loss_total
     
@@ -351,7 +425,6 @@ class PINN_base(pl.LightningModule):
 
         s_col, t_col, s_all, t_b, u_b, Mean, Var = self.get_data(batch, False)
 
-        grid_s = np.linspace(0,1,s_all.shape[1])
 
         # predict
         u_pred_b = self.u(s_all, t_b)
@@ -363,6 +436,76 @@ class PINN_base(pl.LightningModule):
         Var = Var.detach().numpy().flatten()
 
         return u_pred_b, N_theta
+
+class PINN_base_sim(PINN_base):
+    def __init__(self, u:nn.Module , lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
+        super().__init__(u=u, lr=lr, optim_class=optim_class, schedule_lr=schedule_lr)
+
+    def get_data(self, data_batch, requires_grad=True):
+        s_col, t_col, s_bon, t_bon, u_bon = data_batch
+
+        s_col = s_col.squeeze().float()
+        t_col = t_col.squeeze().float()
+
+        t_bon = t_bon.squeeze(dim=0).float() if len(t_bon.shape) == 4 else t_bon  # change dimension
+
+        s_bon = s_bon.squeeze(dim=0).float() if len(s_bon.shape) == 4 else s_bon # torch.einsum('ijk->jik', s_bon).float()
+        # if cell state has higher dimension
+        # (1, T, n_grid) -> (T, n_grid, 1)
+
+        # reguires_grad
+        if requires_grad:
+            s_col.requires_grad = True
+            t_col.requires_grad = True
+            s_bon.requires_grad = True
+            t_bon.requires_grad = True
+
+        return s_col, t_col, s_bon, t_bon, u_bon
+
+    def forward(self, s, t) -> torch.Tensor:
+        """
+        use the neural network to evaluate the density 
+        """
+        u = self.u(s,t)
+        return u #- u.min()[0].view(-1,1)
+
+    def risidual_loss(self, s, t) -> torch.Tensor:
+        """
+        Diffusion is not used  
+        
+        Input
+        ------
+        s: the cell state, 
+        t: experimental time
+        """
+        dudt, growth, drift, diffuse = self.simplified_equation(s, t)
+        rhs = growth + drift 
+        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+
+    def compute_loss(self, batch_data):
+        """
+        get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
+        """
+        s_col, t_col, s_all, t_b, u_b = self.get_data(batch_data)
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        
+        Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_p = 0
+        Loss_k = 0
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+
+        Loss_total = Loss_b + Loss_p + Loss_r 
+        
+        return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
 
 def batch_jacobian(func, x, create_graph=False):
     """
@@ -382,4 +525,6 @@ def batch_hessian(func, x):
         grad = autograd.grad(jacobian[:, i].sum(), x, create_graph=True, retain_graph=True)[0]
         hessians.append(grad.unsqueeze(1))
     return torch.cat(hessians, dim=1)
+
+
 

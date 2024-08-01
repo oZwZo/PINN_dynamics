@@ -5,58 +5,7 @@ import torch
 from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
-from .PINN_base import PINN_base
-
-class MLP_surrogate(nn.Module):
-    
-    def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
-
-        super().__init__()
-        ### activation function check
-        if type(activation_fn) == str:
-            assert activation_fn in dir(nn), "invalid activation function, please check `https://pytorch.org/docs/stable/nn.html`"
-            self.act_fns = [activation_fn] * (len(channels)-1)
-
-        elif type(activation_fn) == str:
-            assert len(activation_fn) == len(channels) - 2 , "The length of activation_fn should be 2 less than channels"
-            self.act_fns = activation_fn
-
-        else:
-            raise TypeError("Augment `activation_fn` can only be string or list")
-        
-        
-        ### define MLP module
-        self.u_theta = nn.Sequential()
-        in_out = zip(channels[:-2], channels[1:-1])
-        for i, channel in enumerate(in_out):
-            self.u_theta.add_module(f"Linear_{i}", nn.Linear(*channel))
-            self.u_theta.add_module(f"{self.act_fns[i]}_{i}", eval('nn.%s()'%activation_fn))
-
-        self.u_theta.add_module(f"Linear_{i+1}", nn.Linear(*channels[-2:]))  # output layer
-    
-    def forward(self, s, t) -> torch.Tensor:
-        
-        # a lot of sanity check
-        if not isinstance(s, torch.Tensor):
-            s = torch.tensor(s, requires_grad=True)
-        if not isinstance(t, torch.Tensor):
-            t = torch.tensor(t, requires_grad=True)
-
-        #  check input shape
-        if len(t.shape) == len(s.shape)-1: 
-            # t is just flatten but s is high dimensional
-            t = t.unsqueeze(-1)
-
-        if type(t) == int:
-            t = torch.full_like(s, fill_value=t, device=s.device, requires_grad=s.requires_grad)
-        # if t.shape[-1] != 1:
-        #     t = t.unsqueeze(-1)
-
-        assert len(s.shape) == len(t.shape), "make sure s and t has the same shape"
-        input = torch.cat([s,t], dim=-1)
-
-        out = self.u_theta(input)
-        return out.squeeze(-1)  # -> (B, n_grid)
+from ._PINN_base import PINN_base, PINN_base_sim
 
 class CubicSpline(nn.Module):
     def __init__(self, x=None, y=None, n_knot=11):
@@ -132,13 +81,18 @@ class CubicSpline(nn.Module):
         return cs
 
 class MultiDim_CubicSpline(nn.Module):
-    def __init__(self, y, x=None, n_knot=None):
+    def __init__(self, y, x=None, n_knot=None, collapse=False):
         """
         High dimensional Cubic Spline with independent knots per dimension
         x : the coordinate space
         y : 2-d array/tensor values of the initial knots
+        n_knot : the number of anchor points for each dimension. This will end up with
+        collapse : bool, merge all the dimension into 1 output
         """
         super().__init__()
+
+        self.collapse = collapse
+
         # sanity check
         if x is None:
             x = np.linspace(0,1, y.shape[0]) #.reshape(n_knot,-1)
@@ -156,7 +110,8 @@ class MultiDim_CubicSpline(nn.Module):
         for d2 in range(y.shape[1]):
             self.Splines.append(CubicSpline(y=y[:,d2], x=x, n_knot=y.shape[0]))
 
-        # self.Splines = nn.ModuleList(Splines)
+        if collapse:
+            self.fc_out = nn.Linear(y.shape[1], 1, bias=False)
         
     
     def forward(self, xs, t=None)->torch.Tensor:
@@ -179,47 +134,15 @@ class MultiDim_CubicSpline(nn.Module):
         for d2 in range(xs.shape[1]):
             ys_d2 = self.Splines[d2](xs[:, d2], t)      # out of the dimension
             ys.append(ys_d2.reshape(-1,1))              # make it 2dim for stacking
-        return torch.cat(ys, axis=1)
+        out = torch.cat(ys, axis=1)
 
-class MLP(pl.LightningModule):
-    """
-    MLP surrogate wrap by Lightning Module    
-    """
-    def __init__(self, *, lr, **kwargs):
-        super().__init__()
-        self.save_hyperparameters()
-        self.model = MLP_surrogate(**kwargs)
-        self.lr = lr
-        self.loss_fn = nn.MSELoss(reduction='sum')
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-        return optimizer
-
-    def forward(self, s, t):
-        return self.model(s, t)
-    
-    def training_step(self, train_batch, index):
-        s,t, u = train_batch
-        u_pred = self.model(s,t)
-        
-        Total_loss = self.loss_fn(u.squeeze(), u_pred.squeeze())
-
-        self.log("total_loss", Total_loss, on_epoch=True, prog_bar=True)
-        return Total_loss
+        if self.collapse:
+            out = self.fc_out(out)
+        return out
 
 
-
-class MLP_exp(MLP):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def forward(self, s, t):
-        base = self.model(s, t)
-        return torch.exp(base)
-
-class Cspline_PINN(PINN_base):
-    def __init__(self, *, n_knot=9,  n_dim=1, **kwargs):
+class Cspline_PINN(PINN_base_sim):
+    def __init__(self, *, n_knot=9,  n_dim=1, D_collapse=False, v_collapse=False, **kwargs):
         """
         The PINN that uses cubic spine to fit the behavior functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
@@ -260,10 +183,10 @@ class Cspline_PINN(PINN_base):
                 vy[-2] = -10
                 vy[-1] = -12
                 
-            self.D = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
-            self.v = MultiDim_CubicSpline(y = vy, n_knot=n_knot)
-            self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot)
-
+            self.D = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot, collapse=D_collapse)
+            self.v = MultiDim_CubicSpline(y = vy, n_knot=n_knot, collapse=v_collapse)
+            self.g = MultiDim_CubicSpline(y = torch.ones((n_knot, n_dim)).float(), n_knot=n_knot, collapse=True)
+    
 
 class Cspline_woPL(Cspline_PINN):
     def __init__(self, *args, **kwargs):
@@ -282,34 +205,16 @@ class Cspline_woPL(Cspline_PINN):
         """
         super().__init__(*args, **kwargs)
 
-    def training_step(self, train_batch, index):
+    def compute_loss(self, batch_data):
         """
-        log individual loss term and them combine then into total loss
+        re compute the total loss as only the boundary and residual loss
         """
-        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
         
-        Loss_total = Loss_b +  Loss_r  # only two loss is used here
-        
-        
-        # if Loss_total < 1e-6:
-        #     Loss_total *= 1000
-        # if Loss_total < 1e-5:
-        #     Loss_total *= 100
-        # elif Loss_total < 1e-4:
-        #     Loss_total *= 10
-        # elif Loss_total < 1e-3:
-        #     Loss_total *= 2
-        
-        
-        self.log("residual_loss", Loss_r, on_epoch=True)
-        self.log("boundary_loss", Loss_b, on_epoch=True)
-        self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
+        Loss_total, Loss_r, Loss_b, Loss_p, Loss_k = super().compute_loss(batch_data)
 
-        if self.schedule_lr != "False":
-            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
+        Loss_total = 10*Loss_b + Loss_r
         
-        return Loss_total
+        return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
 
 
 class Cspline_bo(Cspline_PINN):
@@ -329,24 +234,15 @@ class Cspline_bo(Cspline_PINN):
         """
         super().__init__(*args, **kwargs)
 
-    def training_step(self, train_batch, index):
+    def compute_loss(self, batch_data):
         """
-        log individual loss term and them combine then into total loss
+        re compute the total loss has the boundary loss onlu
         """
-        Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(train_batch)
         
-        Loss_total = Loss_b 
+        Loss_total, Loss_r, Loss_b, Loss_p, Loss_k = super().compute_loss(batch_data)
+        Loss_total = Loss_b
         
-        
-        self.log("residual_loss", Loss_r, on_epoch=True)
-        self.log("boundary_loss", Loss_b, on_epoch=True)
-        self.log("population_loss", Loss_p, on_epoch=True)
-        self.log("total_loss", Loss_total, on_epoch=True)
-
-        if self.schedule_lr != "False":
-            self.log("lr",self.scheduler.get_last_lr()[0], on_epoch=True)
-        
-        return Loss_total
+        return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
 
 class Cspline_symKLD(Cspline_PINN):
     def __init__(self, u:nn.Module, n_knot=11, n_grid:int = 300, lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=None):
