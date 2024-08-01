@@ -16,6 +16,7 @@ from PINN import reader
 from PINN import functions as fns
 
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+torch.set_float32_matmul_precision('medium')
 
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
@@ -27,6 +28,7 @@ parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
+parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
 parser.add_argument("--nearby_cellstate", type=int, required=False, default=10, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 args = parser.parse_args()
@@ -50,13 +52,11 @@ if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 
-# train_DS = reader.MeshGrid_DS(Data_pt=pt_path,  n_grid=args.n_grid,  nearby_cellstate=args.nearby_cellstate, collocation_points=300, n_repeat=10)
-
 ery_mk_ad = sc.read_h5ad(h5_path)
 
 # MeshGrid_Resample
 # MeshGrid_logDS
-train_DS = reader.HigDimRe_AnnDS(AnnData=ery_mk_ad, n_dimension = 5, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+train_DS = reader.HigDimRe_AnnDS(AnnData=ery_mk_ad, n_timepoint=args.n_timepoint, n_dimension = 5, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                      nearby_cellstate=args.nearby_cellstate, 
                                     collocation_points=300)
 
@@ -107,20 +107,10 @@ else:
 
 # define neural network surrogate
 
-# if args.pretrained is not None:
-#     model = models.MLP.load_from_checkpoint(args.pretrained)
-# else:
-#     model = models.MLP(
-#         lr=3e-4,
-#         channels = channels,
-#         activation_fn='Tanh'
-#     )
-
 channels = [int(c) for c in args.channels.split(",")]   
 u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
-model = Model_Class(u=u_theta, n_dim=5, 
-                         n_knot=9, lr=args.lr, 
+model = Model_Class(u=u_theta, channels= [6,32],  lr=args.lr, 
                          schedule_lr=schedule_lr)
 
 
