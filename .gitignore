@@ -22,5 +22,9 @@ data/combined_filt.h5ad
 data/ery_mk.h5ad
 
 # Explore_Notebook/
+Explore_Notebook/testing.ipynb
+Explore_Notebook/test.ipynb
 Explore_Notebook/density/denmarf_pickle
 data/*npy
+
+PINN/models/__pycache__
