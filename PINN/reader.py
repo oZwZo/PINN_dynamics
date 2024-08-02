@@ -99,7 +99,7 @@ class HigDim_AnnDS(AnnDataset):
         # norm_p
         ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_cell)
         self.density_P = self.u_b/ub_norm                #TODO:check shape and the values
-        scaled_P = self.density_P.flatten() ** 0.5
+        scaled_P = self.density_P.flatten() ** self.resampling_indensity
         self.density_P = scaled_P / scaled_P.sum() 
         
         self.u_b = torch.from_numpy(self.u_b.flatten()).float()
@@ -108,7 +108,7 @@ class HigDim_AnnDS(AnnDataset):
         # observeds
         self.pop_var = np.array(var_ls)  # (tb,)
         self.pop_mean = self.popD['mean'] # (tb,)
-        self.T_b = self.popD['t']         # (tb,)
+        self.T_b = T_b         # (tb,)
 
 
     def __len__(self):
@@ -129,11 +129,14 @@ class HigDimRe_AnnDS(HigDim_AnnDS):
 
         self.s_std = self.cellstate.std(axis=0)
 
+    def __len__(self):
+        return self.s.shape[0] * 2
 
-    def __getitem__(self, index):
+    def __getitem__(self, i):
         
         # boundary points
-        i = self.resampling_by_density(1, p=self.density_P)
+        if i > self.s.shape[0]:
+            i = self.resampling_by_density(1, p=self.density_P)
         s_bon = self.s[i]      
         t_bon = self.t_b[i]
         u_bon = self.u_b[i]
@@ -144,7 +147,7 @@ class HigDimRe_AnnDS(HigDim_AnnDS):
         s_col = self.cellstate[i_col] + err * self.s_std
         s_col = torch.from_numpy(s_col).float()
 
-        t_col = np.random.randint(self.popD['t'].min(), self.popD['t'].max())
+        t_col = np.random.uniform(self.t_b.min().item(), self.t_b.max().item())
         t_col = torch.tensor([t_col]).float()
 
         return  s_col, t_col, s_bon.squeeze(), t_bon, u_bon
