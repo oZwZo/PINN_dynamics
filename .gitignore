@@ -21,4 +21,7 @@ nohup.out
 data/combined_filt.h5ad
 data/ery_mk.h5ad
 
-Explore_Notebook/
+# Explore_Notebook/
+Explore_Notebook/density/denmarf_pickle
+test.ipynb
+testing.ipynb
