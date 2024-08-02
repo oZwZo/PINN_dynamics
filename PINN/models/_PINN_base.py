@@ -31,7 +31,7 @@ class PINN_base(pl.LightningModule):
         self.lr = lr
         self.optim_class = optim_class
         self.PopL_fn = nn.GaussianNLLLoss()                     # for population loss
-        self.SSE_fn = nn.MSELoss(reduction='sum')               # for residual and boundary loss
+        self.L_norm_fn = nn.MSELoss(reduction='sum')               # for residual and boundary loss
         self.KLD_fn = torch.nn.KLDivLoss(reduction="none") # for distribution loss
         
         # the neural netowrk surrogate of u
@@ -288,7 +288,7 @@ class PINN_base(pl.LightningModule):
         u_pred_b : u predicted at boundary timepoint
         u_b : observed boundary
         """
-        return self.SSE_fn(u_pred_b.squeeze(), u_b.squeeze()) 
+        return self.L_norm_fn(u_pred_b.squeeze(), u_b.squeeze()) 
     
     def risidual_loss(self, s, t) -> torch.Tensor:
         """
@@ -301,7 +301,7 @@ class PINN_base(pl.LightningModule):
         """
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth + drift + diffuse
-        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
         
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
@@ -480,7 +480,7 @@ class PINN_base_sim(PINN_base):
         """
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth + drift 
-        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
     def compute_loss(self, batch_data):
         """

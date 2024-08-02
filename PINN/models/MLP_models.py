@@ -97,13 +97,16 @@ class MLP_exp(MLP):
 
 class MLP_PINN(PINN_base_sim):
     def __init__(self, *, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, **kwargs):
-        """
+        r"""
         The PINN that uses MLP to fit all the functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
         Agument
         -------
-        u_channel : the number of MLP channels of the u function
-        curve_channel : the number of MLP channels of the CubicSpline function
+        u : the u_theta , MLP_surrogate class
+        channel : the number of MLP channels of the Behavior function
+        [g, v, D]_channel : the number of MLP channels of the Behavior function
+        collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                         which controls the complexity of the pde term.
         
         kwargs 
         -------
@@ -143,9 +146,10 @@ class MLP_PINN(PINN_base_sim):
         """
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth - drift + diffuse
-        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
 class MLP_woD(MLP_PINN):
+
     def __init__(self,*args, **kwargs):
         super().__init__(*args, **kwargs)
     
@@ -155,7 +159,17 @@ class MLP_woD(MLP_PINN):
         """
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth - drift 
-        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+    
+class MLP_woD_Linf(MLP_woD):
+    """
+    use the L-infinity norm as the loss function
+    """
+    def __init__(self,*args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def L_norm_fn(self, a, b):
+        return torch.norm(a - b, p=float('inf'))
 
 class MLP_TIGON(MLP_PINN):
     def __init__(self,*args, **kwargs):
@@ -167,4 +181,4 @@ class MLP_TIGON(MLP_PINN):
         """
         dudt, growth, drift, diffuse = self.TIGON_equation(s, t)
         rhs = growth - drift 
-        return self.SSE_fn(rhs.squeeze(), dudt.squeeze())
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
