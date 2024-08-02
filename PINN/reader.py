@@ -130,13 +130,14 @@ class HigDimRe_AnnDS(HigDim_AnnDS):
         self.s_std = self.cellstate.std(axis=0)
 
     def __len__(self):
-        return self.s.shape[0] * 2
+        return self.s.shape[0]
 
     def __getitem__(self, i):
         
         # boundary points
-        if i > self.s.shape[0]:
-            i = self.resampling_by_density(1, p=self.density_P)
+        # resampling rate  is set to 0.5
+        if np.random.random() >= 0.5: 
+            i = self.resampling_by_density(1, p=self.density_P).item()
         s_bon = self.s[i]      
         t_bon = self.t_b[i]
         u_bon = self.u_b[i]

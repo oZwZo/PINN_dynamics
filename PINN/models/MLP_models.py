@@ -169,7 +169,7 @@ class MLP_woD_Linf(MLP_woD):
         super().__init__(*args, **kwargs)
     
     def L_norm_fn(self, a, b):
-        return torch.norm(a - b, p=float('inf'))
+        return torch.norm(a.squeeze() - b.squeeze(), p=float('inf'))
 
 class MLP_TIGON(MLP_PINN):
     def __init__(self,*args, **kwargs):
