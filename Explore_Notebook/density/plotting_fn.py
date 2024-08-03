@@ -8,6 +8,7 @@ import scanpy as sc
 from typing import Callable
 
 from matplotlib import pyplot as plt
+from matplotlib import rcParams
 import seaborn as sns
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
