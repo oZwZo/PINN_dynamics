@@ -111,7 +111,10 @@ channels = [int(c) for c in args.channels.split(",")]
 u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
 model = Model_Class(u=u_theta, channels= [6,32],  lr=args.lr, 
-                         schedule_lr=schedule_lr)
+                    v_channels = [6,32,32,1],
+                    g_channels = [6,32,32,1],
+                    D_channels = [6,32,32,1],
+                    schedule_lr=schedule_lr)
 
 
                             ###                     ###
