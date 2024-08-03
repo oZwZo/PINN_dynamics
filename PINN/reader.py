@@ -127,7 +127,7 @@ class HigDimRe_AnnDS(HigDim_AnnDS):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.s_std = self.cellstate.std(axis=0)
+        self.s_std = torch.from_numpy(self.cellstate.std(axis=0)).float()
 
     def __len__(self):
         return self.s.shape[0]
@@ -145,8 +145,8 @@ class HigDimRe_AnnDS(HigDim_AnnDS):
         # collocalization point
         err = np.random.randn()
         i_col = np.random.choice(range(len(self.cellstate)))
-        s_col = self.cellstate[i_col] + err * self.s_std
-        s_col = torch.from_numpy(s_col).float()
+        s_col = self.s[i] + err * self.s_std
+        # s_col = torch.from_numpy(s_col).float()
 
         t_col = np.random.uniform(self.t_b.min().item(), self.t_b.max().item())
         t_col = torch.tensor([t_col]).float()
