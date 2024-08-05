@@ -1,28 +1,22 @@
+# File:         PINN/plotting_fns/curve_plot.py
+# Usage:        PINN.pl.<fn_name>
+# Description:  Visualization functions mainly for single-trajecotry modeling
+                
+
 import os
 import numpy as np
 import pandas as pd
 import torch 
 from .. import functions  as myfun
 from matplotlib import pyplot as plt
-import matplotlib.animation as animation
 from matplotlib import cm
 
 
-# def load_model():
-#     # define neural network surrogate
-#     u_theta = models.MLP_surrogate(channels = [2, 32, 32, 1], activation_fn='Tanh')
-
-#     # pseudo dynamics model
-#     checkpoint_path ="/home/wergillius/Project/PINN_dynamics/logs/Cspline_PINN/lightning_logs/version_4/checkpoints/epoch=999-total_loss=10.15423775.ckpt"
-#     log_model = models.Cspline_PINN.load_from_checkpoint(checkpoint_path)
-    
-#     return log_model
-
-# predict behavior
-
 def behavior_curves(model, n_grid=300):
-
-    #TODO: extend to high-dimensional
+    r"""
+    visualize the fit dynamic behavior curves for a single trajectory where
+    the cellstate is 1-dimensional and range in (0,1)
+    """
 
     s = np.linspace(0, 1, n_grid)
     grid_ts = torch.from_numpy(s)
@@ -56,9 +50,16 @@ def behavior_curves(model, n_grid=300):
     return fig, axs
 
 
-def density_by_time(u_b, u_pred_b, train_DS, cellstate='cell state'):
-    """
-    u_b
+def density_by_time(u_b, u_pred_b, T_b, xlabel='cell state'):
+    r"""
+    plot density curve by cellstate
+
+    Augments:
+    ---------
+    u_b : [tensor, ndarray] : the observed density of shape [n_timepoints, n_grid]
+    u_pred_b : [tensor, ndarray] : the predicted density of shape [n_timepoints, n_grid]
+    T_b : a list of real-time 
+    xlabel : the x label
     """
     fig, axs = plt.subplots(1,2,figsize=(8,3), dpi=300)
     cell_state = np.linspace(0,1,u_b.shape[1])
@@ -68,23 +69,23 @@ def density_by_time(u_b, u_pred_b, train_DS, cellstate='cell state'):
     if isinstance(u_pred_b, torch.Tensor):
         u_pred_b = u_pred_b.detach().numpy()
         
-    for i in range(len(train_DS.T_b)):
+    for i in range(len(T_b)):
         axs[0].plot(cell_state, u_b[i], label=i)
-        axs[1].plot(cell_state, u_pred_b[i], '--', label=train_DS.T_b[i])
+        axs[1].plot(cell_state, u_pred_b[i], '--', label=T_b[i])
     
     axs[0].set_title('observation')
     axs[1].set_title('prediction')
     
-    axs[0].set_xlabel('cell state')
-    axs[1].set_xlabel('cell state')
+    axs[0].set_xlabel(xlabel)
+    axs[1].set_xlabel(xlabel)
     axs[0].set_ylabel('density')
     
     plt.legend(ncol=2)
-    fig, axs = plt.subplots(int(np.ceil(len(train_DS.T_b)/2)), 2, figsize=(6,6), sharex=True, 
+    fig, axs = plt.subplots(int(np.ceil(len(T_b)/2)), 2, figsize=(6,6), sharex=True, 
                         gridspec_kw={'hspace':0.4},  dpi=300)
     axs = axs.flatten()
 
-    for i,t in enumerate(train_DS.T_b):
+    for i,t in enumerate(T_b):
         axs[i].plot(cell_state, u_b[i],  label='observed')
         axs[i].plot(cell_state, u_pred_b[i], '--', label='pred')
         axs[i].set_title('day %s'%t)
@@ -92,8 +93,8 @@ def density_by_time(u_b, u_pred_b, train_DS, cellstate='cell state'):
             axs[i].set_ylabel("density")
 
     axs[0].legend()
-    axs[-2].set_xlabel(cellstate)
-    axs[-1].set_xlabel(cellstate)
+    axs[-2].set_xlabel(xlabel)
+    axs[-1].set_xlabel(xlabel)
 
     return fig, axs
 
@@ -115,9 +116,9 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
 
     Example
     ---------
-    >>>ad = ery_mk_ad = sc.read_h5ad("<XXX>.h5ad")
-    >>>train_DS = PINN.reader.MeshGrid_AnnDS(*args, **kwargs)
-    >>>model = PINN.models.Cspline_PINN.load_from_checkpoint(*args, **kwargs)
+    >>> ad = ery_mk_ad = sc.read_h5ad("<XXX>.h5ad")
+    >>> train_DS = PINN.reader.MeshGrid_AnnDS(*args, **kwargs)
+    >>> model = PINN.models.Cspline_PINN.load_from_checkpoint(*args, **kwargs)
 
     """
     # getting experimental info from training Dataset
@@ -218,39 +219,3 @@ def evaluate_behavior_for_cell(ad, model, dpt_key='dpt_pseudotime'):
     # sc.pl.umap(ad, colors=['PINN_v','PINN_g', 'PINN_D'])
 
     return ad
-
-
-def contour_animation(s, continous_u , save_path, fps=5):
-
-    """
-    animation of density contour change by time
-    s: nparray, (ngrid**2, 2) , s from train_DS
-    continous_u : nparray, (n_timepoints, ngrid**2)
-    save_path : str
-    """
-    fig , ax = plt.subplots(1,1, dpi=300)
-    ax.set_xlim(0,1)         
-    ax.set_ylim(0,1)
-
-    n_grid = 50
-
-    XX = s[:,0].reshape(n_grid,n_grid)    # in DS, meshgrid is flatten
-    YY = s[:,1].reshape(n_grid,n_grid)
-
-    def init():
-        Z_ub = continous_u[0].reshape(n_grid, n_grid)
-        ax.contour(XX,YY, Z_ub, cmap='Blues')
-        ax.set_title("Day 0")
-
-    def run(data):
-        if data>0:
-            ax.clear()   
-            t = np.arange(0, continous_u.shape[0])[data]
-            Z_ub = continous_u[data].reshape(n_grid, n_grid)
-            ax.contour(XX,YY, Z_ub, cmap='Blues')
-            ax.set_title("Day %d"%t)
-        else:
-            pass
-
-    ani = animation.FuncAnimation(fig, run, frames=continous_u.shape[0], interval=10, init_func=init)  # 製作動畫
-    ani.save(save_path, fps=fps, writer='pillow') 

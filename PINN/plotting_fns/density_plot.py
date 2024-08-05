@@ -16,7 +16,7 @@ timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 def umap_by_time(color_col, anndata, timepoints=timepoints):
 
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.4,2), dpi=100, gridspec_kw={'wspace':0.4})
+    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
     # axs = axs.flatten()
     axis_j = 0
 
@@ -34,10 +34,12 @@ def umap_by_time(color_col, anndata, timepoints=timepoints):
         axis_j += 1
 
     return fig, axs
+
+
 def plot_along_pseudotime(color_col, anndata, pt_col='dpt_pseudotime', timepoints=timepoints):
     
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.4,2), dpi=100, gridspec_kw={'wspace':0.4})
+    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
     # axs = axs.flatten()
     axis_j = 0
 
@@ -69,7 +71,7 @@ def plot_along_pseudotime(color_col, anndata, pt_col='dpt_pseudotime', timepoint
 def scatter_density(color_col, anndata, pt_col='dpt_pseudotime', timepoints=timepoints):
 
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.4,2), dpi=100, gridspec_kw={'wspace':0.4})
+    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
     # axs = axs.flatten()
     axis_j = 0
 
