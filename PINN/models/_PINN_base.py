@@ -437,6 +437,43 @@ class PINN_base(pl.LightningModule):
 
         return u_pred_b, N_theta
 
+    def predict_step(self, batch_data, batch_index):
+        s_col, t_col, s_all, t_b, u_b = self.get_data(batch_data)
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        return  u_pred_b
+
+    def predict_param(self, DataSet, param='g'):
+        """
+        Given a DataSet Class, predict the param 
+        """
+        device = next(self.u.parameters()).device
+
+        
+        # get cell states and their paired timepoints
+        if self.time_sensitive:
+            # s is [n_time * n_cell , n_dim]
+            s_all = DataSet.s.float().requires_grad_()
+        else:
+            # cellstate is [n_cell, n_dim]
+            s_all = DataSet.cellstate.float().requires_grad_()
+
+        t_b = DataSet.t_b.float().requires_grad_()
+
+        # get the behavior function
+        sub_module = self.__getattr__(param)
+        param_pred = sub_module(s_all.to(device), t_b.to(device))
+
+            
+        if self.time_sensitive:
+            n_timepoint = len(DataSet.popD['t'])
+            param_pred = param_pred.detach().cpu().numpy().reshape(n_timepoint, -1)
+        else:
+            param_pred = param_pred.detach().cpu().numpy()
+
+
+        return param_pred
+
 class PINN_base_sim(PINN_base):
     def __init__(self, u:nn.Module , lr: Union[float, int] = 3e-4, optim_class="Adam", schedule_lr=False):
         super().__init__(u=u, lr=lr, optim_class=optim_class, schedule_lr=schedule_lr)
@@ -506,6 +543,7 @@ class PINN_base_sim(PINN_base):
         Loss_total = Loss_b + Loss_p + Loss_r 
         
         return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
+
 
 def batch_jacobian(func, x, create_graph=False):
     """

@@ -12,7 +12,10 @@ class MLP_surrogate(nn.Module):
     def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
 
         super().__init__()
+        self.time_sensitive = True
+
         ### activation function check
+
         if type(activation_fn) == str:
             assert activation_fn in dir(nn), "invalid activation function, please check `https://pytorch.org/docs/stable/nn.html`"
             self.act_fns = [activation_fn] * (len(channels)-1)
@@ -58,7 +61,19 @@ class MLP_surrogate(nn.Module):
         out = self.u_theta(input)
         return out.squeeze(-1)  # -> (B, n_grid)
 
+class MLP_s(MLP_surrogate):
+    r"""
+    MLP surrogate predicts merely with cellstate `s`
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.time_sensitive = False
 
+    def forward(self, s, t):
+        """
+        `t` is not used but we keep args consistent
+        """
+        return self.u_theta(s).squeeze(-1)
 
 class MLP(pl.LightningModule):
     """
@@ -96,7 +111,7 @@ class MLP_exp(MLP):
         return torch.exp(base)
 
 class MLP_PINN(PINN_base_sim):
-    def __init__(self, *, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, **kwargs):
+    def __init__(self, *, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, **kwargs):
         r"""
         The PINN that uses MLP to fit all the functions D(s,t), v(s,t) and g(s,t), while the u itself is still a neural network
         
@@ -115,23 +130,30 @@ class MLP_PINN(PINN_base_sim):
         optim_class : str, the optimizer used
         """
         super().__init__(**kwargs)
-        self.n_dim = channels[0] - 1  # the fist dimension is (s, t)
+        self.time_sensitive = time_sensitive
+
+        if time_sensitive:
+            self.n_dim = channels[0] - 1  # the fist dimension is (s, t)
+            MLP_Module = MLP_surrogate
+        else:
+            self.n_dim = channels[0]  
+            MLP_Module = MLP_s
         
 
         # the output for growth is always 1
         if g_channels  is None:
             g_channels = channels + [1]
-        self.g = MLP_surrogate(channels = g_channels, activation_fn='Tanh')
+        self.g = MLP_Module(channels = g_channels, activation_fn='Tanh')
 
         # if we choose to collapse v, that means the parameter is the same for all dimension
         if v_channels is None:
             v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
-        self.v = MLP_surrogate(channels = v_channels, activation_fn='Tanh')
+        self.v = MLP_Module(channels = v_channels, activation_fn='Tanh')
 
         # if we choose to collapse D, that means the parameter is the same for all dimension
         if D_channels is None:
             D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
-        self.D = MLP_surrogate(channels = D_channels, activation_fn='Tanh')
+        self.D = MLP_Module(channels = D_channels, activation_fn='Tanh')
 
 
     def risidual_loss(self, s, t) -> torch.Tensor:
@@ -160,7 +182,49 @@ class MLP_woD(MLP_PINN):
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth - drift 
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+
+
+class MLP_woD_logB(MLP_woD):
+
+    def __init__(self,*args, **kwargs):
+        super().__init__(*args, **kwargs)
     
+    def boundary_loss(self, u_pred_b, u_b) -> torch.Tensor: 
+        """
+        The boundary loss comes from two part
+        
+        Input
+        ------
+        u_pred_b : u predicted at boundary timepoint
+        u_b : observed boundary
+        """
+        u_pred_b = torch.nn.functional.relu(u_pred_b).squeeze()
+        u_b = u_b.squeeze()
+        u_norm = self.L_norm_fn(u_pred_b, u_b) 
+
+
+        # norm at log scale
+        log_u_pred = torch.clamp(torch.log(u_pred_b+1e-30), min=-10, max=0)
+        log_u_b = torch.clamp(torch.log(u_b), min=-10, max=0)
+        log_u_norm = self.L_norm_fn(log_u_pred, log_u_b) 
+
+        if self.current_epoch > 1:
+            loss_b = u_norm + 0.001* log_u_norm
+        else:
+            loss_b = u_norm
+        return loss_b
+    
+class MLP_woD_L2(MLP_woD):
+    """
+    use the L-infinity norm as the loss function
+    """
+    def __init__(self,*args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def L_norm_fn(self, a, b):
+        return torch.norm(a.squeeze() - b.squeeze(), p=2)
+
+
 class MLP_woD_Linf(MLP_woD):
     """
     use the L-infinity norm as the loss function
