@@ -14,7 +14,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=10, norm_time=True, **kwargs):
+    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=True, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -60,7 +60,8 @@ class HigDim_AnnDS(AnnDataset):
             T_b = T_b / T_b.max()
         
         ###
-        # set up boundary conditions
+        # set up boundary conditions 
+        # compute the densities
         ### 
         ub_ls = []
         tb_ls = []
@@ -81,6 +82,9 @@ class HigDim_AnnDS(AnnDataset):
             u  = density_fun(cellstate.T)   # evaluate with the entire space
             n_exp = self.popD['n_lib'][tb_idx]
 
+            # u_min = np.min(u[u!=0])
+            # u = np.where(u!=0, u, u_min*0.1) # replace 0 with 0.1* u_min
+            # u = np.clip(u, a_min=1e-10, a_max=None)
             u = u / u.sum()
                     
             ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
@@ -89,7 +93,7 @@ class HigDim_AnnDS(AnnDataset):
             cb_ls.append(cb_t)
             density_funs.append(density_fun)
 
-        self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_cell)
+        self.u_b = np.vstack(ub_ls)   # (tb, n_cell)
         self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
         self.density_funs = density_funs
 
@@ -110,33 +114,16 @@ class HigDim_AnnDS(AnnDataset):
         self.pop_mean = self.popD['mean'] # (tb,)
         self.T_b = T_b         # (tb,)
 
-
-    def __len__(self):
-        return self.s.shape[0] 
-
-
-    def __getitem__(self, index):
-
-        i = self.resampling_by_density(1, p=self.density_P)
-
-        return self.s[i], self.t_b[i], self.u_b[i]
-
-
-
-class HigDimRe_AnnDS(HigDim_AnnDS):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
         self.s_std = torch.from_numpy(self.cellstate.std(axis=0)).float()
 
     def __len__(self):
-        return self.s.shape[0]
+        return self.s.shape[0] 
 
     def __getitem__(self, i):
         
         # boundary points
         # resampling rate  is set to 0.5
-        if np.random.random() >= 0.5: 
+        if np.random.random() >= self.resampling_rate: 
             i = self.resampling_by_density(1, p=self.density_P).item()
         s_bon = self.s[i]      
         t_bon = self.t_b[i]
