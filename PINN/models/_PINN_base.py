@@ -449,14 +449,16 @@ class PINN_base(pl.LightningModule):
         """
         device = next(self.u.parameters()).device
 
+        cellstate_only = (self.time_sensitive == False) and (param != 'u')
         
         # get cell states and their paired timepoints
-        if self.time_sensitive:
+        if cellstate_only:
+            # cellstate is [n_cell, n_dim]
+            s_all = torch.from_numpy(DataSet.cellstate).float().requires_grad_()
+        else:
             # s is [n_time * n_cell , n_dim]
             s_all = DataSet.s.float().requires_grad_()
-        else:
-            # cellstate is [n_cell, n_dim]
-            s_all = DataSet.cellstate.float().requires_grad_()
+            
 
         t_b = DataSet.t_b.float().requires_grad_()
 
@@ -465,11 +467,11 @@ class PINN_base(pl.LightningModule):
         param_pred = sub_module(s_all.to(device), t_b.to(device))
 
             
-        if self.time_sensitive:
+        if cellstate_only:
+            param_pred = param_pred.detach().cpu().numpy()
+        else:
             n_timepoint = len(DataSet.popD['t'])
             param_pred = param_pred.detach().cpu().numpy().reshape(n_timepoint, -1)
-        else:
-            param_pred = param_pred.detach().cpu().numpy()
 
 
         return param_pred
