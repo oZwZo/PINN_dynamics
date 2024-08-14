@@ -29,14 +29,16 @@ parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the 
 parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
 parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
-parser.add_argument("--nearby_cellstate", type=int, required=False, default=10, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--batch_size", type=int, required=False, default=50, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
+parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
 
 
                                 ###               ###
                                 #     read data     #
                                 ###               ###
+
 
 path = os.path.abspath(".")
 h5_path = os.path.join(path, f'{args.dataset}.h5ad')
@@ -47,20 +49,29 @@ if not os.path.exists(h5_path):
 else:
     main_path = os.path.dirname(path)
 
-save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_multiBnch", args.model)
+save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_multiBnch", args.model+['','_tsense'][args.time_sensitive])
+
+if not os.path.exists(os.path.dirname(save_path)):
+    os.mkdir(os.path.dirname(save_path))
+
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 
-ery_mk_ad = sc.read_h5ad(h5_path)
+adata = sc.read_h5ad(h5_path)
 
 # MeshGrid_Resample
 # MeshGrid_logDS
-train_DS = reader.HigDimRe_AnnDS(AnnData=ery_mk_ad, n_timepoint=args.n_timepoint, n_dimension = 5, cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
-                                     nearby_cellstate=args.nearby_cellstate, 
-                                    collocation_points=300)
+train_DS = reader.HigDim_AnnDS(AnnData=adata, 
+                            n_dimension=args.n_dimension,
+                            n_timepoint=args.n_timepoint, 
+                            cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
+                            log_transform=False, 
+                            norm_time = False,
+                            resampling_rate = 0.1,
+                                )
 
-batch_size = 50 if args.nearby_cellstate == 1 else 1
+batch_size = args.batch_size
 train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True)
 
 
@@ -108,13 +119,18 @@ else:
 # define neural network surrogate
 
 channels = [int(c) for c in args.channels.split(",")]   
+n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
+
 u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
-model = Model_Class(u=u_theta, channels= [6,32],  lr=args.lr, 
-                    v_channels = [6,32,32,1],
-                    g_channels = [6,32,32,1],
-                    D_channels = [6,32,32,1],
-                    schedule_lr=schedule_lr)
+
+model = Model_Class(u=u_theta, channels= [n_dim, 32],  lr=args.lr, 
+                    v_channels = [n_dim, 128,32, args.n_dimension],
+                    g_channels = [n_dim, 128,32,1],
+                    D_channels = [n_dim, 32,32,1],
+                    schedule_lr=schedule_lr,
+                    time_sensitive = args.time_sensitive
+                    )
 
 
                             ###                     ###
@@ -139,7 +155,7 @@ trainer = pl.Trainer(
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
-                    max_epochs=300,
+                    max_epochs=1000,
                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                 monitor="total_loss", mode="min", save_top_k=2)]
                     )
