@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import pandas as pd
-from . import functions as myfn
+from . import functions as tl
 from scipy.stats import gaussian_kde
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
@@ -345,7 +345,7 @@ class Pdyn_ExtractDataset(Processed_baseDS):
         for tb_idx, t_b in enumerate(D['pop']['t']):
             
             # quantify the cell densitied at grided s
-            u, N, n_exp = myfn.boundary_density_at(D, t_b, s)
+            u, N, n_exp = tl.boundary_density_at(D, t_b, s)
                     
             ub_ls.append(u / h_inv)
             tb_ls.append(np.full_like(u, t_b))
@@ -473,7 +473,7 @@ class MeshGrid_DS(Processed_baseDS, MeshGrid):
         for tb_idx, t_b in enumerate(D['pop']['t']):
             
             # quantify the cell densitied at grided s
-            u, N, n_exp = myfn.boundary_density_at(D, t_b, meshgrid)
+            u, N, n_exp = tl.boundary_density_at(D, t_b, meshgrid)
                     
             ub_ls.append(u / h_inv)
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
