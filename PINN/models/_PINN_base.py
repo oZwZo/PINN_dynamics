@@ -134,16 +134,29 @@ class PINN_base(pl.LightningModule):
         duds = torch.autograd.grad(u.sum(), s, create_graph=True)[0]
         
         # the first term:  a second order derivative
-        Du = torch.mul(D, duds)   # element-wise 
-        d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True)[0] #TODO:check shape
+        Du = self.mul(D, duds)   # element-wise 
+        
+        # right hand side
+        if len(Du.shape) == 1: # for one trajectory system
+            # the second order deviritives of density u to cell state : ∂^2u/∂s^2
+            #  ∂/∂s (D*∂u/∂s)
+            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True)[0] 
+
+        else:   # for multi-dimensiona data
+            # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
+            d2Dds2_ls  = []
+            for i in range(v.shape[1]):
+                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                d2Dds2_ls.append(du_dsisi)
+            d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
         
         # the second term : ∂/∂s[ v*u ]
-        vu = torch.mul(v, u)
+        vu = self.mul(v, u)
         dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] #TODO:check shape
         
         # right hand side
-        diffuse = d2Dds2
-        drift = dvuds 
+        diffuse = d2Dds2.sum(dim=1)
+        drift = dvuds.sum(dim=1)
         growth = torch.mul(g, u)
         
         return dudt, growth, drift, diffuse
@@ -161,6 +174,8 @@ class PINN_base(pl.LightningModule):
         D = self.D(s,t)
         v = self.v(s,t)
         g = self.g(s,t) # d- dim
+
+        # v = nn.functional.relu(v)
         
         # left : ∂u/∂t
         dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
@@ -170,7 +185,7 @@ class PINN_base(pl.LightningModule):
         
         
         # right hand side
-        if len(v.shape) == 1: # for one trajectory system
+        if len(s.shape) == 1: # for one trajectory system
             
             # the second order deviritives of density u to cell state : ∂^2u/∂s^2
             #  ∂/∂s (D*∂u/∂s)
@@ -181,7 +196,7 @@ class PINN_base(pl.LightningModule):
             # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
             u_ss_ls  = []
             for i in range(v.shape[1]):
-                du_dsisi = u_ss = torch.autograd.grad(duds[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                du_dsisi = torch.autograd.grad(duds[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
                 u_ss_ls.append(du_dsisi)
             u_ss = torch.cat(u_ss_ls, dim=1)
 
@@ -238,17 +253,17 @@ class PINN_base(pl.LightningModule):
         v = self.v(s,t)
         g = self.g(s,t) # d- dim
 
+        u = torch.clamp(u, min=1e-10)
+
         if len(g.shape) > 1:
             g = g.mean(dim=1)
 
         dlnu_dt = torch.autograd.grad(torch.log(u).sum(), t, create_graph=True)[0]
 
-        vu = v * u.reshape(-1, 1)   # (b, n_dim) * (b, 1)  -> (b, n_dim)
-
         diffuse = 0
-        drift = self.trace_div(vu, s)
+        drift = self.trace_div(v, s)
 
-        growth = g * u
+        growth = g 
 
         return dlnu_dt, growth, drift, diffuse
 
@@ -401,8 +416,6 @@ class PINN_base(pl.LightningModule):
         return Loss_total
 
     # def on_train_epoch_end(self):
-    #     self.
-    
     def validation_step(self, val_batch, index):
         
         Loss_total, Loss_r, Loss_b, Loss_p, Loss_k = self.compute_loss(val_batch)
@@ -443,7 +456,7 @@ class PINN_base(pl.LightningModule):
         u_pred_b = self.u(s_all, t_b)
         return  u_pred_b
 
-    def predict_param(self, DataSet, param='g'):
+    def predict_param(self, DataSet, param='g'):    
         """
         Given a DataSet Class, predict the param 
         """
@@ -465,6 +478,9 @@ class PINN_base(pl.LightningModule):
         # get the behavior function
         sub_module = self.__getattr__(param)
         param_pred = sub_module(s_all.to(device), t_b.to(device))
+
+        if (len(param_pred.shape) != 1) and (param_pred.shape[1] == DataSet.n_dimension):
+            param_pred = self.trace_div(param_pred, s_all)
 
             
         if cellstate_only:

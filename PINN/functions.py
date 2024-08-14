@@ -24,6 +24,17 @@ def load_model(ckptvx):
     model_vx.load_state_dict(ckpt['state_dict'])
     return model_vx
 
+def pred_to_nday(x, n_timepoint=5, n_dim=5): 
+    """
+    use to reshape prediction
+    """
+    nday = x.detach().cpu().numpy().reshape(n_timepoint,-1)
+
+    if nday.shape[-1] != t5_ad.shape[0]:
+        nday = nday.reshape(n_timepoint, -1, n_dim)
+    return nday
+
+
 def compute_guassian_u(Cellstate_ay, dimension=10):
     r"""
     Estimating the density high dimensional cell state coordinates and its change by experimental time.

@@ -170,6 +170,7 @@ class MLP_PINN(PINN_base_sim):
         rhs = growth - drift + diffuse
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
+
 class MLP_woD(MLP_PINN):
 
     def __init__(self,*args, **kwargs):
@@ -182,6 +183,19 @@ class MLP_woD(MLP_PINN):
         dudt, growth, drift, diffuse = self.simplified_equation(s, t)
         rhs = growth - drift 
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+
+class MLP_logTIGON(MLP_PINN):
+    def __init__(self,*args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def risidual_loss(self, s, t) -> torch.Tensor:
+        """
+        Diffusion is not used  
+        """
+        dudt, growth, drift, diffuse = self.log_TIGON_equation(s, t)
+        rhs = growth - drift 
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+
 
 
 class MLP_woD_logB(MLP_woD):

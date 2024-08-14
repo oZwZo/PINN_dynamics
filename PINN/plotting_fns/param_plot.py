@@ -15,7 +15,12 @@ import matplotlib.animation as animation
 from .density_plot import umap_by_time
 
 # predict
-def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True):    
+
+def format_ay(array):
+    formated  = [np.format_float_scientific(u, precision=2) for u in array]
+    return formated
+
+def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cell_of_t=True):    
     r"""
     Visaulize the fitted behavior params in umap and by time
 
@@ -26,6 +31,8 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True):
     timepoints : list of real-time
     param : str, the param to visaulize, must be one of ['u', 'g', 'v', 'D']
     copy : bool, default to True, will save the params to adata.obs if copy is set to False
+    cell_of_t : bool, default to True, only visualize cells of each timepoints. 
+                If set to False, all cells will be shown in each panels.
 
     Example
     ----------
@@ -38,7 +45,8 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True):
     if isinstance(prediction, torch.Tensor):
         prediction = prediction.detach().cpu().numpy()
     print("prediction of shape", prediction.shape)
-    print("prediction ranging between", prediction.min(axis=1), prediction.max(axis=1))
+    u_min_ls = format_ay(prediction.min(axis=1))
+    u_max_ls = format_ay(prediction.max(axis=1))
 
     if copy:
         adata = adata.copy()
@@ -47,9 +55,15 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True):
         timepoints = adata.uns['pop']['t'][:prediction.shape[0]]
     
     for i, t in enumerate(timepoints):
-        adata.obs[f'Day{t}_{param}_pred'] = prediction[i]
+        adata.obs[f'Day{t}_{param}'] = prediction[i]
 
-    umap_by_time(lambda x: f'Day{x}_{param}_pred', adata, timepoints)
+    fig, axs = umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints, cell_of_t=cell_of_t)
+
+    for i, ax in enumerate(axs):
+        title = ax.get_title()
+        new_title = title + "\nmin:%s"%u_min_ls[i] + "\nmax:%s"%u_max_ls[i]
+        ax.set_title(new_title)
+    return fig, axs
 
 def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     r"""
@@ -90,3 +104,4 @@ def contour_animation(s, continous_u , save_path, fill=False, fps=5):
 
     ani = animation.FuncAnimation(fig, run, frames=continous_u.shape[0], interval=10, init_func=init)  # 製作動畫
     ani.save(save_path, fps=fps, writer='pillow') 
+

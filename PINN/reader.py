@@ -58,6 +58,9 @@ class HigDim_AnnDS(AnnDataset):
         if norm_time:
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
             T_b = T_b / T_b.max()
+        else:
+            T_b = self.popD['t']
+            T_b = T_b / T_b.min() 
         
         ###
         # set up boundary conditions 
@@ -83,9 +86,9 @@ class HigDim_AnnDS(AnnDataset):
             n_exp = self.popD['n_lib'][tb_idx]
 
             # u_min = np.min(u[u!=0])
-            # u = np.where(u!=0, u, u_min*0.1) # replace 0 with 0.1* u_min
-            # u = np.clip(u, a_min=1e-10, a_max=None)
+            u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
             u = u / u.sum()
+            u = np.clip(u, a_min=1e-10, a_max=None) 
                     
             ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
@@ -123,7 +126,7 @@ class HigDim_AnnDS(AnnDataset):
         
         # boundary points
         # resampling rate  is set to 0.5
-        if np.random.random() >= self.resampling_rate: 
+        if np.random.random() <= self.resampling_rate: 
             i = self.resampling_by_density(1, p=self.density_P).item()
         s_bon = self.s[i]      
         t_bon = self.t_b[i]

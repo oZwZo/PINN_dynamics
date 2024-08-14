@@ -10,10 +10,35 @@ from typing import Callable
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
 import seaborn as sns
+import matplotlib.animation as animation
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 
-def umap_by_time(color_col, anndata, timepoints=timepoints):
+def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True,):
+    r"""
+    A very basic functions plotting cellular attribute in the umap and stratified by time
+
+    Arguments
+    ----------
+    attribute : str or callable, a function of time or a obs_key of the anndata
+    anndata : anndata
+    cell_of_t : bool, default to True, only visualize cells of each timepoints. 
+                If set to False, all cells will be shown in each panels.
+    timepoints : iterable, list of real-time , like the number of columns
+
+    Return
+    ----------
+    matplotlb figure and axes
+
+    Example
+    ----------
+    >>> u_b = DataSet.u_b
+    >>> adata = DataSet.adata
+    >>> for i, t in enumerate(DataSet.popD['t']):
+            adata.obs[f'Day{t}_u'] = u_b[i]
+    >>> # use a lambda function as attributes to plot
+    >>> PINN.pl.umap_by_time(lambda x: f'Day{x}_u', adata, DataSet.popD['t']);
+    """
 
     n_timepoints = len(timepoints)
     fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
@@ -23,11 +48,13 @@ def umap_by_time(color_col, anndata, timepoints=timepoints):
     for t in timepoints:
         cbs = anndata.obs.query('`timepoint_tx_days` == @t').index
 
-        col = color_col(t) if isinstance(color_col, Callable) else color_col
-        title = col if isinstance(color_col, Callable) else color_col+' d%d'%t
+        col = attribute(t) if isinstance(attribute, Callable) else attribute
+        title = col if isinstance(attribute, Callable) else attribute+' d%d'%t
 
         sc.pl.umap(anndata, show=False, return_fig=False,  ax=axs[axis_j], alpha=0.5, s=50,frameon=False);
-        sc.pl.umap(anndata[cbs], color=col, alpha=0.7, color_map='viridis', 
+
+        ad_t = anndata[cbs] if cell_of_t else anndata
+        sc.pl.umap(ad_t, color=col, alpha=0.7, color_map='viridis', 
                 return_fig=False,show=False, ax=axs[axis_j], s=50, frameon=False, 
                 title=title);
         
@@ -39,15 +66,17 @@ def umap_by_time(color_col, anndata, timepoints=timepoints):
 def plot_along_pseudotime(color_col, anndata, pt_col='dpt_pseudotime', timepoints=timepoints):
     
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
+    fig,axs = plt.subplots(2, n_timepoints, figsize=(n_timepoints*2.7,5), dpi=100, gridspec_kw={'wspace':0.4})
     # axs = axs.flatten()
     axis_j = 0
 
     for t in timepoints:
         cbs = anndata.obs.query('`timepoint_tx_days` == @t').index
 
+        col = color_col(t) if isinstance(color_col, Callable) else color_col
+
         sc.pl.umap(anndata, show=False, return_fig=False,  ax=axs[0,axis_j], alpha=0.5, s=50,frameon=False);
-        sc.pl.umap(anndata[cbs], color=color_col, alpha=0.7, color_map='viridis', #colorbar_loc=None,
+        sc.pl.umap(anndata[cbs], color=col, alpha=0.7, color_map='viridis', #colorbar_loc=None,
                 return_fig=False,show=False, ax=axs[0, axis_j], s=50, frameon=False, 
                 title='scaled pseudotime d%d'%t);
 
@@ -80,3 +109,62 @@ def scatter_density(color_col, anndata, pt_col='dpt_pseudotime', timepoints=time
         sns.scatterplot(data=anndata.obs.loc[cbs], x=pt_col, y = color_col, ax=axs[axis_j])
         axis_j += 1
     return fig
+
+def resampling_animation_meshgrid(s, train_DS, save_path):
+    """
+    s : cellstate coordinates, [n_grid**2, 2]
+    train_DS : `reader.MeshGrid_logDS` classs
+    """
+    fig , ax = plt.subplots(1,1, dpi=300)
+    ax.set_xlim(0,1)         
+    ax.set_ylim(0,1)         
+
+    def init():
+        ax.scatter(s[:,0], s[:,1], color='lightgray', s=3)
+
+    def run(data):
+        if data>0:
+            ax.clear()
+            reindex_i = train_DS.resampling_by_density(50, p=train_DS.density_P)
+            ax.scatter(s[:,0], s[:,1], color='lightgray', s=3)
+            ax.scatter(s[reindex_i,0], s[reindex_i,1], color='navy', s=6, marker='s')
+        else:
+            pass
+
+    ani = animation.FuncAnimation(fig, run, frames=100, interval=10, init_func=init)  # make animation
+    ani.save(save_path, fps=5, writer='pillow') 
+
+
+def resampling_animation_umap(train_DS, save_path):
+    """
+    train_DS : `reader.HigDim_AnnDS` classs
+    save_path : str, a path ends with .gif
+    """
+    coords = train_DS.adata.obsm['X_umap']
+    resampling_rate = train_DS.resampling_rate
+
+    fig , ax = plt.subplots(1,1, dpi=100) 
+
+    def init():
+        ax.scatter(coords[:,0], coords[:,1], color='lightgray', s=3)
+
+    def run(data):
+        if data>0:
+            ax.clear()
+            reindex_i = []
+            for i in np.random.randint(low=0, high=len(train_DS), size=100):
+                if np.random.random() <= resampling_rate:
+                    i = train_DS.resampling_by_density(1, p=train_DS.density_P)
+                    reindex_i.append(i.item())
+                else:
+                    reindex_i.append(i)
+            reindex_i = np.array(reindex_i) % coords.shape[0]
+
+            ax.scatter(coords[:,0], coords[:,1], color='lightgray', s=3)
+            ax.scatter(coords[reindex_i,0], coords[reindex_i,1], color='navy', s=6, marker='s')
+            ax.set_title("resampling rate = %f" %resampling_rate)
+        else:
+            pass
+
+    ani = animation.FuncAnimation(fig, run, frames=200, interval=10, init_func=init)  # make animation
+    ani.save(save_path, fps=5, writer='pillow') 
