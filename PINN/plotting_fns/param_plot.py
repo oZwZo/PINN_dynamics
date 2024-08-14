@@ -57,7 +57,6 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cel
     for i, t in enumerate(timepoints):
         adata.obs[f'Day{t}_{param}'] = prediction[i]
 
-<<<<<<< HEAD
     fig, axs = umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints, cell_of_t=cell_of_t)
 
     for i, ax in enumerate(axs):
@@ -65,9 +64,6 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cel
         new_title = title + "\nmin:%s"%u_min_ls[i] + "\nmax:%s"%u_max_ls[i]
         ax.set_title(new_title)
     return fig, axs
-=======
-    umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints)
->>>>>>> da87d7271675f5e9995b6b55d48cde02a4948ea8
 
 def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     r"""
