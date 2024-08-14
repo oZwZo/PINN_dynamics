@@ -195,6 +195,36 @@ def evaluate_2d_mesh_density(D, t_b, x):
     
     return u_t, Nt, n_exp
 
+def compute_highdim_density(adata, cellstate_key='DM_EigenVectors', n_timepoints=None, n_dimension=None, timepoint_key='time', cellstate=None):
+    
+    timepoints = adata.uns['pop']['t'][:n_timepoints]
+    n_timepoints = len(timepoints)
+
+    if cellstate is None:
+        cellstate = adata.obsm[cellstate_key][:, :n_dimension]
+        
+    popD = adata.uns['pop']
+
+    u_ls = []
+    density_funs = []
+
+    for tb_idx, t_b in enumerate(popD['t']):
+            
+        # subset ad_t
+        
+        cb_t = adata.obs.query(f"`{timepoint_key}` == @t_b").index
+        ad_t = adata[cb_t].copy()
+        cellstate_t = ad_t.obsm[cellstate_key][:, :n_dimension]
+
+        density_fun = gaussian_kde(cellstate_t.T)
+        u  = density_fun(cellstate.T)   # evaluate with the entire space
+        n_exp = popD['n_lib'][tb_idx]
+
+        u_ls.append(u)
+        density_funs.append(density_fun)
+
+    return u_ls, density_funs
+
 def augment_cdf(x, x_a, y):
     """
     This function takes a CDF defined on a grid x and augments it to a finer grid x_a by duplicating the CDF values within intervals defined by x. zeros or ones accordingly were added for where x_a values are outside the range of x

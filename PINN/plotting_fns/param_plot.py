@@ -47,9 +47,9 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True):
         timepoints = adata.uns['pop']['t'][:prediction.shape[0]]
     
     for i, t in enumerate(timepoints):
-        adata.obs[f'Day{t}_{param}_pred'] = prediction[i]
+        adata.obs[f'Day{t}_{param}'] = prediction[i]
 
-    umap_by_time(lambda x: f'Day{x}_{param}_pred', adata, timepoints)
+    umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints)
 
 def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     r"""
