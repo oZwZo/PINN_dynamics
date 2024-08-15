@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 #TODO: complete AnnDataset
 class AnnDataset(Dataset):
     
-    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint', pop_dict=None, n_grid=300, collocation_points=600,  log_transform=True , resampling_indensity=0.5, resampling_rate=0.5):
+    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', pop_dict=None, n_grid=300, collocation_points=600,  log_transform=True , resampling_indensity=0.5, resampling_rate=0.5):
         """
         PINN-dynamics Dataset, extract 
 

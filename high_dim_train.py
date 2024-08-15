@@ -125,7 +125,7 @@ u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
 
 model = Model_Class(u=u_theta, channels= [n_dim, 32],  lr=args.lr, 
-                    v_channels = [n_dim, 128,32, args.n_dimension],
+                    v_channels = [n_dim, 128, 32, args.n_dimension],
                     g_channels = [n_dim, 128,32,1],
                     D_channels = [n_dim, 32,32,1],
                     schedule_lr=schedule_lr,
