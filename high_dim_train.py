@@ -1,4 +1,4 @@
-import os, argparse, typing
+import os, argparse, typing, re
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -115,6 +115,10 @@ else:
                             #     define model     #
                             ###                  ###
 
+# device
+device = 'gpu' if torch.cuda.is_available() else 'cpu'
+device = 'cpu' if args.gpu_devices == None else 'gpu'
+gpu_device = args.gpu_devices
 
 # define neural network surrogate
 
@@ -132,15 +136,22 @@ model = Model_Class(u=u_theta, channels= [n_dim, 32],  lr=args.lr,
                     time_sensitive = args.time_sensitive
                     )
 
+if args.pretrained is not None:
+
+    # match model type from path
+    W_Class = re.match(r".*\/(?P<MODEL>MLP_\w{0,20})\/.*", args.pretrained).groups()[0]    
+    W_Class = W_Class.replace("_tsense","")
+    # load the model
+    pretrained_model = eval(f"models.{W_Class}").load_from_checkpoint(args.pretrained, map_location='cpu')
+    
+    if "bo" in W_Class:
+        model.u.load_state_dict(pretrained_model.u.state_dict()) 
 
                             ###                     ###
                             #     define Triainer     #
                             ###                     ###
                             
-# device
-device = 'gpu' if torch.cuda.is_available() else 'cpu'
-device = 'cpu' if args.gpu_devices == None else 'gpu'
-gpu_device = args.gpu_devices
+
 
 # logger and checkpoints
 
@@ -162,4 +173,6 @@ trainer = pl.Trainer(
 
 # start training
 model.train()
-trainer.fit(model, train_DL, ckpt_path = args.pretrained)
+trainer.fit(model, train_DL,
+            # ckpt_path = args.pretrained
+            )

@@ -6,6 +6,7 @@ from torch import nn
 import pytorch_lightning as pl
 from typing import Any, Union
 from ._PINN_base import PINN_base, PINN_base_sim
+from typing import Any, Union, Callable
 
 class MLP_surrogate(nn.Module):
     
@@ -170,6 +171,18 @@ class MLP_PINN(PINN_base_sim):
         rhs = growth - drift + diffuse
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
+class MLP_full(MLP_PINN):
+
+    def __init__(self,*args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def risidual_loss(self, s, t) -> torch.Tensor:
+        """
+        Diffusion is not used  
+        """
+        dudt, growth, drift, diffuse = self.equation(s, t)
+        rhs = growth - drift + diffuse
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
 class MLP_woD(MLP_PINN):
 
@@ -184,7 +197,7 @@ class MLP_woD(MLP_PINN):
         rhs = growth - drift 
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
 
-class MLP_logTIGON(MLP_PINN):
+class MLP_logTIGON(MLP_full):
     def __init__(self,*args, **kwargs):
         super().__init__(*args, **kwargs)
     
@@ -198,7 +211,7 @@ class MLP_logTIGON(MLP_PINN):
 
 
 
-class MLP_woD_logB(MLP_woD):
+class MLP_woD_logB(MLP_full):
 
     def __init__(self,*args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -260,3 +273,73 @@ class MLP_TIGON(MLP_PINN):
         dudt, growth, drift, diffuse = self.TIGON_equation(s, t)
         rhs = growth - drift 
         return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+
+class MLP_bo(MLP_PINN):
+    def __init__(self,*args, **kwargs):
+        """
+        boundary loss only
+        """
+        super().__init__(*args, **kwargs)
+
+    def risidual_loss(self, s, t) -> torch.Tensor:
+        """
+        Use the Tigon equation to inform the model
+        """
+        dudt, growth, drift, diffuse = self.equation(s, t)
+        rhs = growth - drift + diffuse
+        return self.L_norm_fn(rhs.squeeze(), dudt.squeeze())
+
+    def configure_optimizers(self):
+        lr = self.lr
+        if self.optim_class == 'LBFGS':
+            optimizer = torch.optim.LBFGS(self.u.parameters(), lr=lr, max_iter=20,
+                                          max_eval=None, tolerance_grad=1e-07, tolerance_change=1e-09)
+        elif self.optim_class == 'RMSprop':
+            optimizer = torch.optim.RMSprop(self.u.parameters(), lr=lr)
+        else:
+            # i.e. Adam              
+            optimizer = torch.optim.Adam(self.u.parameters(), lr=lr)
+        
+        if self.schedule_lr != "False":
+            # so we can pass string
+            if isinstance(self.schedule_lr, Callable):
+                self.scheduler = self.schedule_lr(optimizer)
+
+            else:
+                self.scheduler = torch.optim.lr_scheduler.StepLR(
+                    optimizer, step_size  = 10 , gamma = 0.1)
+                
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler" : {
+                    "scheduler" : self.scheduler,
+                    "monitor" : "total_loss",
+                    }
+                }
+        else:
+            return optimizer
+
+    def compute_loss(self, batch_data):
+        """
+        get the data and compute the loss
+
+        Return
+        -------
+        residual loss
+        boundary loss
+        population loss
+        """
+        s_col, t_col, s_all, t_b, u_b = self.get_data(batch_data)
+        
+        # predict at boundary time poits
+        u_pred_b = self.u(s_all, t_b)
+        
+        Loss_b = self.boundary_loss(u_pred_b, u_b)
+        Loss_p = 0
+        Loss_k = 0
+        # residual loss defied on collocation points
+        Loss_r = self.risidual_loss(s_col, t_col)
+
+        Loss_total = Loss_b
+        
+        return Loss_total, Loss_r, Loss_b, Loss_p, Loss_k
