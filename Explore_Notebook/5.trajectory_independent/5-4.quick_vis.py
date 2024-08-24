@@ -25,7 +25,7 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 
 # CHANG THIS !!!!!
-ckpt_path = "logs/tom_pos-DM_EigenVectors_multiBnch/MLP_full_tsense/lightning_logs/version_0/checkpoints/epoch=55-total_loss=0.00004008.ckpt"
+ckpt_path = "logs/tom_pos-DM_scaled_multiBnch/MLP_full_tsense/lightning_logs/version_1/checkpoints/epoch=301-total_loss=0.00000468.ckpt"
 
 # MODEL CLASS and define model
 model_class = ckpt_path.split("/")[2].replace("_tsense","")
@@ -37,13 +37,15 @@ data_name = ckpt_path.split("/")[1].split("-")[0]
 adata = sc.read_h5ad(f"data/{data_name}.h5ad")
 timepoints = adata.uns['pop']['t']
 
+cellstate_key = ckpt_path.split("/")[1].split("-")[1].replace("_multiBnch","")
+
 n_timepoint = 7
 n_dimension =10
 
 # the DS
 DS_t5 = reader.HigDim_AnnDS(AnnData=adata, n_timepoint=n_timepoint,  
                             n_dimension = n_dimension,
-                              cellstate_key="DM_EigenVectors",  #'DM_EigenVector'
+                              cellstate_key=cellstate_key,  #'DM_EigenVector'
                               log_transform=False,
                               norm_time=False
                               )
@@ -60,6 +62,7 @@ cellstate = torch.from_numpy(DS_t5.cellstate).float().requires_grad_()
 
 # density
 u_pred = mlp_model.predict_param(DS_t5, param='u');
+u_pred = np.clip(u_pred, a_max=None, a_min=0)
 PINN.pl.params_in_umap(t5_ad, u_b, param='u', cell_of_t=False);
 PINN.pl.params_in_umap(t5_ad, u_pred, param='u_pred', cell_of_t=False);
 PINN.pl.params_in_umap(t5_ad, u_pred - u_b, param='u_error', cell_of_t=False);
@@ -117,7 +120,8 @@ PINN.pl.params_in_umap(t5_ad, diffuse, param='diffuse', cell_of_t=False);
 
 # animation
 uprd_by_time = []
-continuous_t = np.arange(timepoints[:n_timepoint].min(), timepoints[:n_timepoint].max()+1)
+tb_ay = t_b.detach().cpu().numpy()
+continuous_t = np.linspace(tb_ay.min(), tb_ay.max(), 112-3)
 for t in continuous_t:
     t_ts = torch.full(size=(cellstate.shape[0],), fill_value=t).float().requires_grad_()
     u_pred = mlp_model.u(cellstate.to(device), t_ts.to(device))
@@ -134,8 +138,10 @@ axs = axs.flatten()
 j = 0
 coords = DS_t5.adata.obsm['X_umap']
 
+color_norm=None #TODO:remove it if we want to apply normal
+
 for i,t in zip(sampled_i, sampled_t):
-    axs[j].scatter(coords[:,0], coords[:,1], c=uprd_by_time[i], s=3, norm=color_norm, label=t)
+    axs[j].scatter(coords[:,0], coords[:,1], c=uprd_by_time[i], s=3, label=t)
     j+=1
 
 
@@ -155,9 +161,9 @@ def run(data):
         t = continuous_t[data]
         upred_t = uprd_by_time[data]
 
-        ax.scatter(coords[:,0], coords[:,1], c=upred_t, s=3, norm=None)
+        ax.scatter(coords[:,0], coords[:,1], c=upred_t, s=3)
         
-        ax.set_title("Day %d"%t)
+        ax.set_title("Day %d"%int(t*3))
     else:
         pass
 
