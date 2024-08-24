@@ -142,6 +142,57 @@ class HigDim_AnnDS(AnnDataset):
         t_col = torch.tensor([t_col]).float()
 
         return  s_col, t_col, s_bon.squeeze(), t_bon, u_bon
+
+
+class TwoTimpepoint_AnnDS(HigDim_AnnDS):
+    def __init__(self, *args, batchsize=200, **kwargs):
+        r"""
+        Dataset for high dimensional cellstate
+        Each batch returns the cellstates, and their density in two consecutive timepoints
+        
+        Augments
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+
+        Other params from AnnDataset:
+        --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+        """
+        super().__init__(*args,**kwargs)
+        self.batchsize = batchsize
+
+        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+    
+    def __len__(self):
+        return int(self.cellstate.shape[0] // self.batchsize) * 9
+
+    def __getitem__(self, i):
+        
+
+        # sample current t
+        i_t = np.random.randint(0, self.n_timepoint-1)  # the i^th timepoint index
+        i_tp1 = i_t + 1                                 # the index of next timepoint
+            
+        # sample cellstates
+        s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
+        s = torch.from_numpy(self.cellstate[s_index]).float()
+
+        # get time
+        t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
+        t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
+        
+
+        # the density of two consecutive 
+        u_t = self.u_b[i_t, s_index]
+        u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
+
+        return  s, (t, t_p1), (u_t, u_tp1)
     
                                 ################################
                                 ## Trajectory Dependent  DS   ##

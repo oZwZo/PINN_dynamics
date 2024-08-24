@@ -170,10 +170,16 @@ class PINN_base(pl.LightningModule):
         
         we calcuate the left hand side (lhs) and the right hand side
         """
+
+        s.requires_grad = True
+        t.requires_grad = True
+
         u = self.u(s,t)
         D = self.D(s,t)
         v = self.v(s,t)
         g = self.g(s,t) # d- dim
+
+        u.requires_grad = True
 
         # v = nn.functional.relu(v)
         
