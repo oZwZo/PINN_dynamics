@@ -60,6 +60,9 @@ else:
 
 
 save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_n{args.n_timepoint}", args.model+['','_tsense'][args.time_sensitive])
+if not os.path.exists(os.path.dirname(save_path)):
+    os.mkdir(os.path.dirname(save_path))
+
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
@@ -73,22 +76,35 @@ channels = [int(c) for c in args.channels.split(",")]
 # for g v and D
 if args.model == "pde_params": 
     n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
-    model_kws = dict(v_channels = [n_dim, 128, 32, args.n_dimension],
-                    g_channels = [n_dim, 128,32,1],
+    max_h = max(channels)
+    model_kws = dict(v_channels = [n_dim, max_h, 32, args.n_dimension],
+                    g_channels = [n_dim, max_h,32,1],
                     D_channels = [n_dim, 32,32,1])
 else:
     model_kws = {}
 
-
-if args.pretrained is not None:
-    model = model_class.load_from_checkpoint(args.pretrained)
-else:
-    model = model_class(
+model = model_class(
         lr=3e-4,
         channels = channels,
         activation_fn='Tanh',
         **model_kws
     )
+
+if args.pretrained is not None:
+    Pretrain_class = args.pretrained.split("/")[2].replace("_tsense","")
+    Pretrain_class = "u_dt_weight"
+    if Pretrain_class == args.model:
+        model = model_class.load_from_checkpoint(args.pretrained)
+    else:
+        # then only u is use
+        Pretrain_class = eval(f"models.{Pretrain_class}")
+        Pretain_model = Pretrain_class.load_from_checkpoint(args.pretrained, map_location='cpu')
+        # inherit the statedict
+        state_dict = Pretain_model.model.state_dict()
+        model.u.load_state_dict(state_dict)
+        
+
+    
 
 train_DS = reader.TwoTimpepoint_AnnDS(
                             AnnData=adata, 
@@ -124,11 +140,12 @@ gpu_device = args.gpu_devices
 trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
-                    # fast_dev_run=True,
+                    # fast_dev_run=Tru
+                    # e,
                     # gradient_clip_val=0.5,
                     default_root_dir=save_path,
                     devices = [gpu_device], 
-                    max_epochs=3000,
+                    max_epochs=300,
                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                 monitor="total_loss", mode="min", save_top_k=2)]
                     )
