@@ -12,7 +12,7 @@ from torchdiffeq import odeint
 
 
 class pde_params(pl.LightningModule):
-    def __init__(self, lr, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, activation_fn:Union[str, list] = 'Mish', D_penalty = None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
         """
         mlp u theta
 
@@ -36,27 +36,30 @@ class pde_params(pl.LightningModule):
         self.save_hyperparameters()
         
         self.time_sensitive = time_sensitive
+        self.lr = lr
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
         if time_sensitive:
             self.n_dim = channels[0] - 1  # the fist dimension is (s, t)
             MLP_Module = MLP_surrogate
         
+        # u_theta, density function
+        self.u = MLP_Module(channels = channels, activation_fn=activation_fn)
 
         # the output for growth is always 1
         if g_channels  is None:
             g_channels = channels + [1]
-        self.g = MLP_Module(channels = g_channels, activation_fn='Tanh')
+        self.g = MLP_Module(channels = g_channels, activation_fn=activation_fn)
 
         # if we choose to collapse v, that means the parameter is the same for all dimension
         if v_channels is None:
             v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
-        self.v = MLP_Module(channels = v_channels, activation_fn='Tanh')
+        self.v = MLP_Module(channels = v_channels, activation_fn=activation_fn)
 
         # if we choose to collapse D, that means the parameter is the same for all dimension
         if D_channels is None:
             D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
-        self.D = MLP_Module(channels = D_channels, activation_fn='Tanh')
+        self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn)
 
         
 
@@ -89,13 +92,16 @@ class pde_params(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam([module.parameters() for module in  [self.g, self.v, self.D]], lr=self.lr)
+        optimizer = torch.optim.Adam(
+            # [module.parameters() for module in  [self.g, self.v, self.D]],
+            self.parameters(),
+                lr=self.lr)
         return optimizer
 
     def forward(self, s, t):
-        u = self.model(s, t) 
-        u = torch.exp(u)
-        return u
+        logu = self.u(s, t) 
+        u_pred = torch.exp(logu)
+        return u_pred
 
     def trace_div(self, f, s):
         """
@@ -141,7 +147,7 @@ class pde_params(pl.LightningModule):
         
         we calcuate the left hand side (lhs) and the right hand side
         """
-        u = self.u(s,t)
+        u = self.forward(s,t) # make sure it is u
         D = self.D(s,t)
         v = self.v(s,t)
         g = self.g(s,t)
@@ -228,8 +234,8 @@ class pde_params(pl.LightningModule):
 
 
         # loss 1 : boundary loss
-        log_u_pred = self.model(s,t)
-        log_utp1_pred = self.model(s,tp1)
+        log_u_pred = self.u(s,t)
+        log_utp1_pred = self.u(s,tp1)
 
         # boundary u of the current timepoint
         ub_loss = self.loss_fn(ut.squeeze(), (torch.exp(log_u_pred).squeeze()))
@@ -311,3 +317,75 @@ class pde_params(pl.LightningModule):
             {"boundary_loss":ub_loss,
              "integrat_loss":utp1_loss,
              "total_loss":total_loss})
+
+
+class pde_params_meshgrid(pde_params):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def training_step(self, train_batch, index):
+        
+        # s : batch, n_dimension
+        # t_b : batch, n_timepoints, 1
+        # u_b : batch, n_timepoints, 1
+        s_bund, t_b, u_b = train_batch
+
+        # divided by 5 to reduce the integration time
+        t0 = t[0].item() / 5
+        t1 = tp1[0].item() / 5 
+
+        device = s.device
+
+
+        # loss 1 : boundary loss
+        log_u_pred = self.u(s,t)
+        log_utp1_pred = self.u(s,tp1)
+
+        # boundary u of the current timepoint
+        ub_loss = self.loss_fn(ut.squeeze(), (torch.exp(log_u_pred).squeeze()))
+        log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
+        log_density_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), log_utp1_pred)
+
+        
+        # loss 2 : dynamics 
+
+        # init_condition 
+        init_condition = (ut, s)
+        step_size = np.around((t1 - t0)/15, decimals=1).item() 
+        step_size = step_size if step_size > 0 else 0.05
+        step_size = min(step_size, 0.4)
+
+        u_int, s_t = odeint(
+                        self.ode_func,
+                        init_condition,
+                        torch.tensor([t0, t1]).type(torch.float32).to(device),
+                        atol=1e-5,
+                        rtol=1e-5,
+                        method='midpoint',
+                        options = {'step_size': step_size}
+                    )
+
+        # boundary u of  the next timepoint
+        utp1_loss = self.loss_fn(u_int[-1], utp1)
+        u_int = nn.functional.relu(u_int)
+
+        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
+
+        D_norm = self.restrict_D(s,t)
+
+        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm
+
+
+        with torch.no_grad():
+            # self.log("residual_loss", Loss_r, on_epoch=True)
+            # self.log("boundary_loss", Loss_b, on_epoch=True)
+            # self.log("population_loss", Loss_p, on_epoch=True)
+            
+            self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
+            self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss

@@ -221,6 +221,7 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         meshgrid_flat = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
 
         self.s = torch.from_numpy(meshgrid_flat).float()
+        self.cellstate = meshgrid_flat
         # self.meshs = self.s.reshape(self.n_grid,self.n_grid, -1) # from flatten to squared high-dim
 
         h_inv = 1/np.prod([s[1] - s[0] for s in coords])
@@ -228,6 +229,9 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         if norm_time:
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
             T_b = T_b / T_b.max()
+        else:
+            T_b = self.popD['t']
+            T_b = T_b / T_b.min() 
         
         ###
         # set up boundary conditions
@@ -291,6 +295,33 @@ class MeshGrid_Resample(MeshGrid_AnnDS):
             resampled_i = i
 
         return super().__getitem__(resampled_i)
+
+class TwoTimepoint_MeshGrid(MeshGrid_Resample):
+    def __init__(self, *args, **kwargs):
+        """
+        the MeshGrid dataset returning the data of two consecutive timepoints
+        """
+        super().__init__(*args, **kwargs)
+
+    def __len__(self):
+        # repeat sampling for 10 times
+        return self.s.shape[0] * (len(self.T_b)  + 1)
+
+    def __getitem__(self, i):
+        
+        tb_i = i // self.s.shape[0] - 1
+        tb_p = self.density_P[tb_i]
+
+        if tb_i >= 0:
+            resampled_i = self.resampling_by_density(1,p=self.density_P[tb_i]).item()
+        else:
+            resampled_i = i
+
+        s_bund = self.s[resampled_i,:] 
+        t_b = torch.from_numpy(self.t_b[:, resampled_i]).float().unsqueeze(-1)
+        u_b = u_b = torch.from_numpy(self.u_b[:, resampled_i]).float()
+        return s_bund, t_b, u_b
+
 
 class MeshGrid_logDS(MeshGrid_Resample):
     def __init__(self, *args, **kwargs):

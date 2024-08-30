@@ -190,7 +190,7 @@ class MeshGrid(Dataset):
         t_col = torch.Tensor(self.N_coll,1).uniform_(min(self.T_b), max(self.T_b)).float()
         
         t_b = torch.from_numpy(self.t_b).float()[:, square_idx].unsqueeze(-1)
-        s_bund = self.s.clone().detach().float()[square_idx, :]
+        s_bund = self.s[square_idx, :].clone().detach().float()
 
         bc_shape = [t_b.shape[0]] + list(s_bund.shape)  # broadcast to
         s_bund = s_bund.broadcast_to(bc_shape).float()
