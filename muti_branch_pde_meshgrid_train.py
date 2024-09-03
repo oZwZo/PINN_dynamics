@@ -15,7 +15,7 @@ from PINN import models as models
 from PINN import reader 
 from PINN import functions as fns
 
-# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 
 parser = argparse.ArgumentParser("Training PINN dynamics on example dataset")
@@ -29,8 +29,9 @@ parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR",
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--n_dimension", type=int, required=False, default=2, help='the number of dimension to used for estimating density')
 parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
-parser.add_argument("--nearby_cellstate", type=int, required=False, default=10, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--nearby_cellstate", type=int, required=False, default=3, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
+parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the number to regulate the weight intensity')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
 
@@ -63,7 +64,7 @@ adata = sc.read_h5ad(h5_path)
 
 # MeshGrid_Resample
 # MeshGrid_logDS
-train_DS = reader.TwoTimepoint_MeshGrid(AnnData=adata, 
+train_DS = reader.AllTimepoint_MeshGrid(AnnData=adata, 
                                 resampling_indensity=0.3, 
                                 resampling_rate=0.3,
                                 n_timepoint = args.n_timepoint,
@@ -75,7 +76,7 @@ train_DS = reader.TwoTimepoint_MeshGrid(AnnData=adata,
                                 norm_time = False,
                                 n_repeat=2)
 
-batch_size = 50 if args.nearby_cellstate == 1 else 1
+batch_size = 50
 train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True)
 
 
@@ -124,7 +125,8 @@ else:
 channels = [int(c) for c in args.channels.split(",")]   
 u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
 Model_Class = eval(f"models.{args.model}")
-# Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_dim=2, n_knot=9, lr=args.lr, schedule_lr=schedule_lr)
+# Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_dim=2, n_knot=9, 
+#                           lr=args.lr, schedule_lr=schedule_lr)
 
 if args.model == "pde_params": 
     n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
@@ -140,6 +142,7 @@ Pdyn_model = Model_Class(
         n_grid=args.n_grid,
         channels = channels,
         activation_fn='Tanh',
+        weight_intensity=args.weight_intensity,
         **model_kws
     )
 
@@ -166,7 +169,7 @@ trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
-                    gradient_clip_val=0.5,
+                    gradient_clip_val=0.3,
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
