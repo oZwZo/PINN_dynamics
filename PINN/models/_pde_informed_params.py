@@ -83,7 +83,7 @@ class pde_params(pl.LightningModule):
         x_hat = torch.clamp(x_hat, min=-24)
 
         if weight == None:
-            weight = (23+x)**3
+            weight = (24+x)**3
             weight /= weight.sum()
 
         # compute loss
@@ -320,61 +320,181 @@ class pde_params(pl.LightningModule):
 
 
 class pde_params_meshgrid(pde_params):
+    """
+    mlp g,v,D for meshgrid dataset
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    Arguments:
+    -------------
+    channel : the number of MLP channels of the Behavior function
+    [g, v, D]_channel : the number of MLP channels of the Behavior function
+    collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                        which controls the complexity of the pde term.
+    
+    kwargs 
+    -------
+    u_theta : the neural netowrk surrogate of u
+    lr: float, the learning rate
+    optim_class : str, the optimizer used
+    D_penalty : float , default None the weight for penalizing D
+
+
+    """
+    def __init__(self, channels, n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+        super().__init__(channels, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
+
+        self.n_grid = n_grid
+        self.h = 1 / n_grid
+        del self.u 
+
+
+    def mesh_grid_equation(self, s, t, u, h):
+        dudt, growth, drift, diffuse = 0
+        return dudt, growth, drift, diffuse
+
+    def ode_func(self, t, states): 
+        
+
+        u_bt = states[1]
+        s_nearby = states[1]
+        u_nearby = states[2]
+
+        # TO get some hyper,s
+        device = s_nearby.device
+        batch_size = s_nearby.shape[0]
+        square_size = u_nearby.shape[1]
+        n_dim = s_nearby.shape[-1]
+        h_inv =  1/self.h
+
+        # the v and D of each dimesion
+        drift = 0
+        diffusion = 0
+
+        # infer the dynamics params with neural networks
+        g_nearby = self.g(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+        D_nearby = self.D(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+        v_nearby = self.v(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+
+
+        # assume u_near is a square
+        assert g_nearby.shape == u_nearby.shape , "u and g does not have the same shape"
+
+        growth = torch.mul(g_nearby, u_nearby)
+        drift = []
+        diffusion = []
+
+        for dim in range(n_dim):
+            
+
+            v_dim = v_nearby[..., dim]   # slice the last dimension
+            assert v_dim.shape == u_nearby.shape , " u and v[:dim] does not have the same shape"
+            vu = torch.mul(v_dim, u_nearby)
+
+            # discretize : ∂vu / ∂s_d : ( v_{i+1} u_{i+1} - v_i u_i ) / h
+            dvuds_dim = h_inv * torch.diff(vu, dim=dim+1) # batch is the first
+            dvu_i_ds = 0.5 * dvuds_dim.sum(dim=dim+1, keepdim=True) #(v_{i+1}u_{i+1} - v_{i-1}u_{i-1})/ 2h
+            
+            drift_dim = torch.cat(
+                [dvuds_dim.index_select( dim+1, torch.tensor([0]).to(device)), 
+                dvu_i_ds,
+                dvuds_dim.index_select( dim+1, torch.tensor([square_size-2]).to(device)), 
+                ] , dim=dim+1
+                )
+            
+            drift.append(drift_dim)
+
+            
+            #  ∂2u / ∂s_d ∂s_d  ( u_i + u_{i-1}}) - (u_{i+1} + u_i)
+            assert D_nearby.shape == u_nearby.shape , "u and D does not have the same shape"
+            u_ss =  h_inv**2 * torch.diff(u_nearby, n=2, dim=dim+1)
+            diffusion_dim = torch.mul(D_nearby, torch.broadcast_to(u_ss, D_nearby.shape))
+
+            diffusion.append(diffusion_dim)
+
+            # # for the sample in the center of a square / cube
+
+            # indices = torch.arange(0, square_size-1)
+            # indices_next = torch.arange(1, square_size)
+            # # to get ( u_i + u_{i-1}}), ((u_{i+1} + u_i)) in batch
+            # u_i = u_nearby.index_select( dim+1, indices) + u_nearby.index_select( dim+1, indices_next)  # [b,2,3] fro dim 0
+            # vu_i = torch.mul(v_dim.index_select( dim+1, indices), u_i)
+            # dvu_i_ds = 0.5 * h_inv * torch.diff(vu_i) #
+
+            # #  1/2h * [ v_{i-1}( u_i + u_{i-1}}) - v_i(u_{i+1} + u_i) ] 
+
+            # drift_i = 0.5 * h_inv * ( self.mul(v_im1, u_im1+u_i) - self.mul(v_i, u_i + u_ip1) )
+            # drift_ip1 = h_inv * ( self.mul(v_i, u_i) - self.mul(v_ip1, u_ip1) )    #  ( v_{i+1} u_{i+1} - v_i u_i ) / h
+            # drift_im1 = h_inv * ( self.mul(v_im1, u_im1) - self.mul(v_i, u_i) )  #  ( v_i u_i - v_{i-1} u_{i-1}}) / h 
+
+        drift = torch.stack(drift).sum(dim=0)
+        diffusion = torch.stack(diffusion).sum(dim=0)
+
+        dudt = growth - drift + diffusion
+
+        dsdt = torch.zeros_like(s_nearby)
+
+        posi = int((square_size - 1)/2)
+        indices = [np.arange(batch_size).tolist()] + [posi]*n_dim
+        duidt = dudt[indices]
+
+        return (duidt, dsdt, dudt)
 
     def training_step(self, train_batch, index):
         
         # s : batch, n_dimension
         # t_b : batch, n_timepoints, 1
         # u_b : batch, n_timepoints, 1
-        s_bund, t_b, u_b = train_batch
+        (s_bund,s_neighbor), t_b, (u_b, u_neighbor) = train_batch
 
         # divided by 5 to reduce the integration time
-        t0 = t[0].item() / 5
-        t1 = tp1[0].item() / 5 
 
-        device = s.device
+        t_list = t_b[0].detach().clone().flatten() / 5
 
-
-        # loss 1 : boundary loss
-        log_u_pred = self.u(s,t)
-        log_utp1_pred = self.u(s,tp1)
-
-        # boundary u of the current timepoint
-        ub_loss = self.loss_fn(ut.squeeze(), (torch.exp(log_u_pred).squeeze()))
-        log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
-        log_density_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), log_utp1_pred)
+        device = s_bund.device
 
         
         # loss 2 : dynamics 
-
         # init_condition 
-        init_condition = (ut, s)
-        step_size = np.around((t1 - t0)/15, decimals=1).item() 
-        step_size = step_size if step_size > 0 else 0.05
-        step_size = min(step_size, 0.4)
+        
+        log_utp1_loss = 0
+        D_norm = 0
+        it = 0
 
-        u_int, s_t = odeint(
+        for t0, t1 in zip(t_list[:-1], t_list[1:]):
+            t1 = t1.detach().cpu().item()
+            t0 = t0.detach().cpu().item()
+
+            step_size = np.around((t1 - t0)/15, decimals=1).item() 
+            step_size = step_size if step_size > 0 else 0.05
+
+            step_size = min(step_size, 0.4)
+
+            ut0 = u_b[:,it]
+            utp1 = u_b[:,it+1]
+            u_neighbor_t0 = u_neighbor[:, it]
+
+            # init condition : ut, s in a square, u in a square
+            init_condition = (ut0, s_neighbor, u_neighbor_t0)
+            u_int, s, u_neighbor_int = odeint(
                         self.ode_func,
                         init_condition,
-                        torch.tensor([t0, t1]).type(torch.float32).to(device),
-                        atol=1e-5,
-                        rtol=1e-5,
+                        t_list.type(torch.float32).to(device),
+                        atol=1e-8,
+                        rtol=1e-8,
                         method='midpoint',
                         options = {'step_size': step_size}
                     )
 
-        # boundary u of  the next timepoint
-        utp1_loss = self.loss_fn(u_int[-1], utp1)
-        u_int = nn.functional.relu(u_int)
+            # boundary u of  the next timepoint
+            utp1_loss = self.loss_fn(u_int[-1], utp1)
+            u_int = nn.functional.relu(u_int)
 
-        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
+            log_utp1_loss += self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
 
-        D_norm = self.restrict_D(s,t)
+            it+=1
 
-        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm
+            D_norm += self.restrict_D(s_bund, torch.full(utp1.shape, t1).to(device))
+
+        total_loss = log_utp1_loss + self.D_penalty * D_norm
 
 
         with torch.no_grad():
@@ -382,9 +502,152 @@ class pde_params_meshgrid(pde_params):
             # self.log("boundary_loss", Loss_b, on_epoch=True)
             # self.log("population_loss", Loss_p, on_epoch=True)
             
-            self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
-            self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            # self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
+            # self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
             self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
+
+
+class pde_neighborloss(pde_params_meshgrid):
+    def __init__(self, channels,  n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
+        super().__init__(channels, n_grid, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
+        self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
+
+    def ode_func(self,t, states):
+                
+        s_nearby = states[0]
+        u_nearby = states[1]
+
+        # TO get some hyper,s
+        device = s_nearby.device
+        batch_size = s_nearby.shape[0]
+        square_size = u_nearby.shape[1]
+        n_dim = s_nearby.shape[-1]
+        h_inv =  1/self.h
+
+        # the v and D of each dimesion
+        drift = 0
+        diffusion = 0
+
+        # infer the dynamics params with neural networks
+        g_nearby = self.g(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+        D_nearby = self.D(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+        v_nearby = self.v(s_nearby, torch.broadcast_to(t, u_nearby.shape))
+
+
+        # assume u_near is a square
+        assert g_nearby.shape == u_nearby.shape , "u and g does not have the same shape"
+
+        growth = torch.mul(g_nearby, u_nearby)
+        drift = []
+        diffusion = []
+
+        for dim in range(n_dim):
+            
+
+            v_dim = v_nearby[..., dim]   # slice the last dimension
+            assert v_dim.shape == u_nearby.shape , " u and v[:dim] does not have the same shape"
+            vu = torch.mul(v_dim, u_nearby)
+
+            # discretize : ∂vu / ∂s_d : ( v_{i+1} u_{i+1} - v_i u_i ) / h
+            dvuds_dim = h_inv * torch.diff(vu, dim=dim+1) # batch is the first
+            dvu_i_ds = 0.5 * dvuds_dim.sum(dim=dim+1, keepdim=True) #(v_{i+1}u_{i+1} - v_{i-1}u_{i-1})/ 2h
+            
+            drift_dim = torch.cat(
+                [dvuds_dim.index_select( dim+1, torch.tensor([0]).to(device)), 
+                dvu_i_ds,
+                dvuds_dim.index_select( dim+1, torch.tensor([square_size-2]).to(device)), 
+                ] , dim=dim+1
+                )
+            
+            drift.append(drift_dim)
+
+            
+            #  ∂2u / ∂s_d ∂s_d  ( u_i + u_{i-1}}) - (u_{i+1} + u_i)
+            assert D_nearby.shape == u_nearby.shape , "u and D does not have the same shape"
+            u_ss =  h_inv**2 * torch.diff(u_nearby, n=2, dim=dim+1)
+            diffusion_dim = torch.mul(D_nearby, torch.broadcast_to(u_ss, D_nearby.shape))
+
+            diffusion.append(diffusion_dim)
+
+        drift = torch.stack(drift).sum(dim=0)
+        diffusion = torch.stack(diffusion).sum(dim=0)
+
+        dudt = growth - drift + diffusion
+
+        dsdt = torch.zeros_like(s_nearby)
+
+        return dsdt, dudt
+
+    def training_step(self, train_batch, index):
+        
+        # s : batch, n_dimension
+        # t_b : batch, n_timepoints, 1
+        # u_b : batch, n_timepoints, 1
+        (s_bund,s_neighbor), t_b, (u_b, u_neighbor) = train_batch
+
+        # divided by 5 to reduce the integration time
+
+        t_list = t_b[0].detach().clone().flatten() / 5
+
+        device = s_bund.device
+
+        
+        # loss 2 : dynamics 
+        # init_condition 
+        
+        it = np.random.choice(range(len(t_list)-1))
+        t1 = t_list[it+1].item()
+        t0 = t_list[it].item()
+
+        # for t0, t1 in zip(t_list[:-1], t_list[1:]):
+
+        step_size = np.around((t1 - t0)/15, decimals=1).item() 
+        step_size = step_size if step_size > 0 else 0.05
+
+        step_size = min(step_size, 0.4)
+
+        ut0 = u_neighbor[:,it]
+        utp1 = u_neighbor[:,it+1]
+        u_neighbor_t0 = u_neighbor[:, it]
+
+        # init condition : ut, s in a square, u in a square
+        init_condition = (s_neighbor, u_neighbor_t0)
+        _, u_neighbor_int = odeint(
+                    self.ode_func,
+                    init_condition,
+                    torch.tensor([t0,t1]).float().to(device),
+                    atol=1e-8,
+                    rtol=1e-8,
+                    method='midpoint',
+                    options = {'step_size': step_size}
+                )
+
+        # boundary u of  the next timepoint
+
+        u_int = nn.functional.relu(u_neighbor_int[-1])
+        log_utp1 = torch.log(utp1+1e-10).flatten()
+
+        utp1_loss = nn.functional.mse_loss(u_int, utp1)
+        
+        with torch.no_grad():
+            weight = (torch.clamp(log_utp1, min=-24) + 24)**self.weight_intensity
+            weight /= weight.sum()
+
+        log_utp1_loss = self.loss_fn(log_utp1, torch.log(u_int+1e-10).flatten(), weight=weight)
+        D_norm = self.restrict_D(s_bund, t_b[:,it].to(device)) + self.restrict_D(s_bund, t_b[:,it+1].to(device))
+            
+
+        total_loss = log_utp1_loss + self.D_penalty * D_norm
+
+
+        with torch.no_grad():
+
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("D_norm", D_norm.item(), on_epoch=True)
             self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
             self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
 
