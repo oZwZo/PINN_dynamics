@@ -141,15 +141,15 @@ class MeshGrid(Dataset):
         """
         given a sample index i in the flatten s, return the location in mesh-grid S
         """
-        ix = i//self.n_grid
-        iy = i%self.n_grid
+        ix = i%self.n_grid
+        iy = i//self.n_grid
         return ix, iy
 
     def indexing_flatten(self, ix, iy):
         """
         given a sample index i in the flatten s, return the location in mesh-grid S
         """
-        return ix*self.n_grid + iy
+        return int(ix + iy*self.n_grid)
 
     def indexing_neighbormesh(self, i, neighborhood=None):
         """
@@ -174,7 +174,18 @@ class MeshGrid(Dataset):
             for iyy in range(iy, iy_end):
                 squares.append(self.indexing_flatten(ixx, iyy))
         return squares
+    
+    def indexing_neighbormesh_center(self, i, neighborhood=None):
+        """
+        looking for the index of neighbor mesh in a square , given the center index i.
         
+        """
+        ix, iy = self.indexing_mesh(i)
+        botten_left_i = self.indexing_flatten(max(ix-1, 0),  max(iy-1,0))
+
+        squares = self.indexing_neighbormesh(botten_left_i, neighborhood)
+        
+        return squares
         
 
     def __getitem__(self, i):

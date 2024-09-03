@@ -199,7 +199,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
                                 ################################
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
-    def __init__(self, *, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
+    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
         """
         Two branch system using mesh grid to span the all cell state space
 
@@ -212,7 +212,16 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         super().__init__(**kwargs)
         self.n_repeat = n_repeat
         self.nearby_cellstate = nearby_cellstate
-    
+        self.h = 1/self.n_grid
+
+        self.n_timepoint = n_timepoint
+        self.popD['t'] = self.popD['t'][:n_timepoint]
+
+        # subset the adata
+        if n_timepoint is not None:
+            t_max = self.popD['t'].max()
+            cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
+            self.adata = self.adata[cbs]
 
         ###
         # create grided cell state
@@ -304,23 +313,58 @@ class TwoTimepoint_MeshGrid(MeshGrid_Resample):
         super().__init__(*args, **kwargs)
 
     def __len__(self):
-        # repeat sampling for 10 times
-        return self.s.shape[0] * (len(self.T_b)  + 1)
+        return self.s.shape[0] 
 
     def __getitem__(self, i):
         
-        tb_i = i // self.s.shape[0] - 1
-        tb_p = self.density_P[tb_i]
+        # sample current t
+        i_t = np.random.randint(0, self.n_timepoint-1)  # the i^th timepoint index
+        i_tp1 = i_t + 1                                 # the index of next timepoint
 
-        if tb_i >= 0:
-            resampled_i = self.resampling_by_density(1,p=self.density_P[tb_i]).item()
-        else:
-            resampled_i = i
+        if np.random.random() <= self.resampling_rate: 
+            i = self.resampling_by_density(1, p=self.density_P[i_t]).item()
+    
+            
+        # sample cellstates
+        s = self.s[i].float()
 
-        s_bund = self.s[resampled_i,:] 
-        t_b = torch.from_numpy(self.t_b[:, resampled_i]).float().unsqueeze(-1)
-        u_b = u_b = torch.from_numpy(self.u_b[:, resampled_i]).float()
-        return s_bund, t_b, u_b
+        # get time
+        t = torch.tensor([self.T_b[i_t]]).float()
+        t_p1 = torch.tensor([self.T_b[i_tp1]]).float()
+        
+
+        # the density of two consecutive 
+        u_t = torch.from_numpy(self.u_b[i_t, [i]]).float()
+        u_tp1 = torch.from_numpy(self.u_b[i_tp1, [i]]).float()  # density of the t plus 1
+
+        return  s, (t, t_p1), (u_t, u_tp1)
+
+class AllTimepoint_MeshGrid(MeshGrid_Resample):
+    def __init__(self, *args, **kwargs):
+        """
+        the MeshGrid dataset returning the data of two consecutive timepoints
+        """
+        super().__init__(*args, **kwargs)
+
+    def __len__(self):
+        return self.s.shape[0] 
+
+    def __getitem__(self, i):
+        
+
+        if np.random.random() <= self.resampling_rate: 
+            tb_i = np.random.choice(range(self.density_P.shape[0]))
+            i = self.resampling_by_density(1, p=self.density_P[tb_i]).item()
+
+        s_bund = self.s[i,:].float()
+        t_b = torch.from_numpy(self.t_b[:, i]).float().unsqueeze(-1)
+        u_b = torch.from_numpy(self.u_b[:, i]).float()
+
+        squre_indexes = self.indexing_neighbormesh_center(i, neighborhood=3)
+
+        s_neighbor = self.s[squre_indexes].reshape(3,3,2).float()
+        u_neighbor = torch.from_numpy(self.u_b[:,squre_indexes]).reshape(-1, 3,3).float()
+        return (s_bund,s_neighbor), t_b, (u_b, u_neighbor)
 
 
 class MeshGrid_logDS(MeshGrid_Resample):
