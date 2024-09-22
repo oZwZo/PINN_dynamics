@@ -7,11 +7,11 @@ import pytorch_lightning as pl
 from typing import Any, Union
 from ._PINN_base import PINN_base, PINN_base_sim
 from .MLP_models import MLP_surrogate
+from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
 from torchdiffeq import odeint
 
-
-class pde_params(pl.LightningModule):
+class pde_params_base(pl.LightningModule):
     def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
         """
         mlp u theta
@@ -39,29 +39,10 @@ class pde_params(pl.LightningModule):
         self.lr = lr
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
-        if time_sensitive:
-            self.n_dim = channels[0] - 1  # the fist dimension is (s, t)
-            MLP_Module = MLP_surrogate
+        self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
         
-        # u_theta, density function
-        self.u = MLP_Module(channels = channels, activation_fn=activation_fn)
 
-        # the output for growth is always 1
-        if g_channels  is None:
-            g_channels = channels + [1]
-        self.g = MLP_Module(channels = g_channels, activation_fn=activation_fn)
 
-        # if we choose to collapse v, that means the parameter is the same for all dimension
-        if v_channels is None:
-            v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
-        self.v = MLP_Module(channels = v_channels, activation_fn=activation_fn)
-
-        # if we choose to collapse D, that means the parameter is the same for all dimension
-        if D_channels is None:
-            D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
-        self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn)
-
-        
 
     def loss_fn(self,x, x_hat, weight=None):
         """
@@ -90,18 +71,12 @@ class pde_params(pl.LightningModule):
         loss = torch.sum(weight * (x - x_hat) ** 2)
         return loss
 
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             # [module.parameters() for module in  [self.g, self.v, self.D]],
             self.parameters(),
                 lr=self.lr)
         return optimizer
-
-    def forward(self, s, t):
-        logu = self.u(s, t) 
-        u_pred = torch.exp(logu)
-        return u_pred
 
     def trace_div(self, f, s):
         """
@@ -187,6 +162,70 @@ class pde_params(pl.LightningModule):
         
         return dudt, growth, drift, diffuse
     
+
+    def restrict_D(self, s, t):
+        """
+        penalize D to restrict instability
+        """
+        D = self.D(s,t)
+        D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
+        return D_L2 
+
+
+class pde_params(pde_params_base):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+        """
+        mlp u theta
+
+        Arguments:
+        -------------
+        channel : the number of MLP channels of the Behavior function
+        [g, v, D]_channel : the number of MLP channels of the Behavior function
+        collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                         which controls the complexity of the pde term.
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        D_penalty : float , default None the weight for penalizing D
+
+
+        """
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, activation_fn=activation_fn, D_penalty = D_penalty)
+        self.save_hyperparameters()
+        
+        self.time_sensitive = time_sensitive
+        self.lr = lr
+        self.D_penalty = 0.1 if D_penalty is None else D_penalty
+
+        self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
+        
+       
+        MLP_Module = MLP_surrogate
+        # u_theta, density function
+        self.u = MLP_surrogate(channels = channels, activation_fn=activation_fn)
+
+        # the output for growth is always 1
+        if g_channels  is None:
+            g_channels = channels + [1]
+        self.g = MLP_Module(channels = g_channels, activation_fn=activation_fn)
+
+        # if we choose to collapse v, that means the parameter is the same for all dimension
+        if v_channels is None:
+            v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
+        self.v = MLP_Module(channels = v_channels, activation_fn=activation_fn)
+
+        # if we choose to collapse D, that means the parameter is the same for all dimension
+        if D_channels is None:
+            D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
+        self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn)
+
+    def forward(self, s, t):
+        logu = self.u(s, t) 
+        u_pred = torch.exp(logu)
+        return u_pred
     
     def ode_func(self, t, states):
         """
@@ -211,14 +250,6 @@ class pde_params(pl.LightningModule):
             ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
 
         return (dudt, ds)
-
-    def restrict_D(self, s, t):
-        """
-        penalize D to restrict instability
-        """
-        D = self.D(s,t)
-        D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
-        return D_L2 
 
 
     def training_step(self, train_batch, index):
@@ -319,7 +350,154 @@ class pde_params(pl.LightningModule):
              "total_loss":total_loss})
 
 
-class pde_params_meshgrid(pde_params):
+class pde_params_singlebranch(pde_params_base):
+    """
+    Use cubic spline to fit g,v,D for single branch dataset
+
+    Arguments:
+    -------------
+    [g, v, D]_channels : the number of cubic spline knots of the Behavior function
+    
+    kwargs 
+    -------
+    lr: float, the learning rate
+    optim_class : str, the optimizer used
+    D_penalty : float , default None the weight for penalizing D
+    """
+
+    def __init__(self, channels, n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+        super().__init__(channels, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
+
+        self.n_grid = n_grid
+        self.h = 1 / n_grid
+        
+        n_knot = channels
+        self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+        self.v = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
+        self.D = CubicSpline(y = torch.zeros(n_knot).float(), n_knot=n_knot)
+    
+    def ode_func(self, t, states): 
+        
+
+        u_t = states[0]     # : 300
+        s = states[1]       # : 300
+
+        # TO get some hyper,s
+        device = s.device
+        batch_size = s.shape[0]  # s: 300
+        h_inv =  1/self.h
+
+        # infer the dynamics params with neural networks
+        g_hat = self.g(s, None)
+        D_hat = self.D(s, None)
+        v_hat = self.v(s, None)
+
+
+        # assume u_near is a square
+        assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
+
+        # growth is simply the product g*u
+        growth = torch.mul(g_hat, u_t)    
+        
+        # discretize ∂vu/∂s -> 1/h*[v_{i+1} u_{i+1} - v_i u_i]
+        vu = torch.mul(v_hat, u_t)
+        dvuds_dim = h_inv * torch.diff(vu)
+        dvuds_dim_end = h_inv * (vu[-2] + vu[-1])  # the boundary
+        drift = torch.cat([dvuds_dim, dvuds_dim_end])
+            
+        # discretize ∂(D∂u∂s)/∂s -> 1/h^2*[D_{i+1}(u_i+2 - u_i+1) - D_i(u_i+1 - u_i)]
+        duds = h_inv * torch.diff(u_t)  # 299
+        D_duds = torch.mul(D_hat, duds) # 299
+        diffusion_mid = h_inv**2 * torch.diff(D_duds) # 289 
+
+        # diffusion at the boundary
+        diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0]))  
+        diffusion_end = h_inv**2 * (-1 * D_hat[-1] * (u_t[-1] - u_t[-2]))
+    
+        diffusion = torch.cat([diffusion_start, diffusion_mid, diffusion_end])
+
+        assert growth.shape == drift.shape
+        assert growth.shape == diffusion.shape
+
+        # the equation
+        dudt = growth - drift + diffusion
+
+        dsdt = torch.zeros_like(s).to(device)
+
+        return (dudt, dsdt)
+
+    def training_step(self, train_batch, index):
+        
+        # s : n_grid, n_dimension
+        # t_b : n_grid, n_timepoints, 1
+        # u_b : n_grid, n_timepoints, 1
+        s, t_b, u_b = train_batch  #TODO: check new dataset
+
+        # divided by 5 to reduce the integration time
+        #TODO: check new dataset
+        t_list = t_b[0].detach().clone().flatten() / 5  
+
+        device = s.device
+
+        
+        # loss 2 : dynamics 
+        # init_condition 
+        
+        log_utp1_loss = 0
+        D_norm = 0
+        it = 0
+
+        for t0, t1 in zip(t_list[:-1], t_list[1:]):
+            t1 = t1.detach().cpu().item()
+            t0 = t0.detach().cpu().item()
+
+            step_size = np.around((t1 - t0)/15, decimals=1).item() 
+            step_size = step_size if step_size > 0 else 0.05
+
+            step_size = min(step_size, 0.4)
+
+            ut0 = u_b[:,it]
+            utp1 = u_b[:,it+1]
+
+            # init condition : ut, s in a square, u in a square
+            init_condition = (ut0, s)
+            u_int, s = odeint(
+                        self.ode_func,
+                        init_condition,
+                        t_list.type(torch.float32).to(device),
+                        atol=1e-8,
+                        rtol=1e-8,
+                        method='midpoint',
+                        options = {'step_size': step_size}
+                    )
+
+            # boundary u of  the next timepoint
+            utp1_loss = self.loss_fn(u_int[-1], utp1)
+            u_int = nn.functional.relu(u_int)
+
+            log_utp1_loss += self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
+
+            it+=1
+
+            D_norm += self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
+
+        total_loss = log_utp1_loss + self.D_penalty * D_norm
+
+
+        with torch.no_grad():
+            # self.log("residual_loss", Loss_r, on_epoch=True)
+            # self.log("boundary_loss", Loss_b, on_epoch=True)
+            # self.log("population_loss", Loss_p, on_epoch=True)
+            
+            # self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
+            # self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
+
+class pde_params_meshgrid(pde_params_base):
     """
     mlp g,v,D for meshgrid dataset
 
@@ -344,7 +522,29 @@ class pde_params_meshgrid(pde_params):
 
         self.n_grid = n_grid
         self.h = 1 / n_grid
-        del self.u 
+        
+        # if self.n_dim == 1:
+        #     Func_Module = CubicSpline
+        # elif not time_sensitive:
+        #     Func_Module = MultiDim_CubicSpline
+        # else:
+        Func_Module = MLP_surrogate
+        
+        # the output for growth is always 1
+        if g_channels  is None:
+            g_channels = channels + [1]
+        self.g = Func_Module(channels = g_channels, activation_fn=activation_fn)
+
+        # if we choose to collapse v, that means the parameter is the same for all dimension
+        if v_channels is None:
+            v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
+        self.v = Func_Module(channels = v_channels, activation_fn=activation_fn)
+
+        # if we choose to collapse D, that means the parameter is the same for all dimension
+        if D_channels is None:
+            D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
+        self.D = Func_Module(channels = D_channels, activation_fn=activation_fn)
+
 
 
     def mesh_grid_equation(self, s, t, u, h):

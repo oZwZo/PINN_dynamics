@@ -31,7 +31,7 @@ parser.add_argument("--n_dimension", type=int, required=False, default=2, help='
 parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
 parser.add_argument("--nearby_cellstate", type=int, required=False, default=3, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
-parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the number to regulate the weight intensity')
+parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the intensity to weight high density region in the loss, > 1 means lean more on high density region')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
 
@@ -68,6 +68,7 @@ train_DS = reader.AllTimepoint_MeshGrid(AnnData=adata,
                                 resampling_indensity=0.3, 
                                 resampling_rate=0.3,
                                 n_timepoint = args.n_timepoint,
+                                timepoint_key = 'time',
                                 cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                 n_grid=args.n_grid,  
                                 nearby_cellstate=args.nearby_cellstate, 
@@ -143,6 +144,7 @@ Pdyn_model = Model_Class(
         channels = channels,
         activation_fn='Tanh',
         weight_intensity=args.weight_intensity,
+        time_sensitive = args.time_sensitive,
         **model_kws
     )
 
