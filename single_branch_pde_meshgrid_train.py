@@ -28,7 +28,7 @@ parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the 
 parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--n_dimension", type=int, required=False, default=2, help='the number of dimension to used for estimating density')
-parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
+parser.add_argument("--n_timepoint", type=int, required=False, default=None, help='the number of timepoints to used for fit the dynamics')
 parser.add_argument("--nearby_cellstate", type=int, required=False, default=3, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the intensity to weight high density region in the loss, > 1 means lean more on high density region')
@@ -64,21 +64,22 @@ adata = sc.read_h5ad(h5_path)
 
 # MeshGrid_Resample
 # MeshGrid_logDS
-train_DS = reader.AllTimepoint_MeshGrid(AnnData=adata, 
-                                resampling_indensity=0.3, 
-                                resampling_rate=0.3,
+train_DS = reader.SingleBranch_AnnDS(AnnData=adata, 
                                 n_timepoint = args.n_timepoint,
                                 timepoint_key = 'time',
                                 cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                 n_grid=args.n_grid,  
-                                nearby_cellstate=args.nearby_cellstate, 
-                                collocation_points=300, 
                                 log_transform=False,
-                                norm_time = False,
-                                n_repeat=2)
+                                norm_time = False)
 
-batch_size = 50
-train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True)
+def reduce_batchdim(batch):
+    # for batch size 1 , remove the batch dimension
+    if len(batch) == 1:
+        batch = [ts.squeeze(0) for ts in batch[0]]
+    return batch
+
+batch_size = 1
+train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True, collate_fn=reduce_batchdim)
 
 
                             ###                  ###
@@ -123,29 +124,14 @@ else:
 
 
 # define neural network surrogate
-channels = [int(c) for c in args.channels.split(",")]   
-u_theta = models.MLP_surrogate(channels = channels, activation_fn='Tanh')
+channels = int(args.channels)
 Model_Class = eval(f"models.{args.model}")
-# Pdyn_model = Model_Class(u=u_theta, n_grid=args.n_grid, n_dim=2, n_knot=9, 
-#                           lr=args.lr, schedule_lr=schedule_lr)
-
-if args.model == "pde_params": 
-    n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
-    max_h = max(channels)
-    model_kws = dict(v_channels = [n_dim, 16 , 16,  args.n_dimension],
-                    g_channels = [n_dim, 16, 16, 1],
-                    D_channels = [n_dim, 16, 1])
-else:
-    model_kws = {}
 
 Pdyn_model = Model_Class(
         lr=args.lr,
         n_grid=args.n_grid,
         channels = channels,
-        activation_fn='Tanh',
         weight_intensity=args.weight_intensity,
-        time_sensitive = args.time_sensitive,
-        **model_kws
     )
 
 if args.pretrained is not None:
@@ -171,13 +157,13 @@ trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
-                    gradient_clip_val=0.3,
+                    gradient_clip_val=None,
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
-                    max_epochs=1000,
+                    max_epochs=300,
                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
-                                                monitor="total_loss", mode="min", save_top_k=3)]
+                                                monitor="total_loss", mode="min", save_top_k=2)]
                     )
 
 # start training

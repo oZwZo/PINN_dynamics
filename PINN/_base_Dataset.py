@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 #TODO: complete AnnDataset
 class AnnDataset(Dataset):
     
-    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', pop_dict=None, n_grid=300, collocation_points=600,  log_transform=True , resampling_indensity=0.5, resampling_rate=0.5):
+    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False , norm_time=False, resampling_indensity=0.5, resampling_rate=0.5):
         """
         PINN-dynamics Dataset, extract 
 
@@ -56,6 +56,15 @@ class AnnDataset(Dataset):
             N0 = self.popD['mean'][0]
             self.popD['mean'] = self.popD['mean'] / N0
             self.popD['var'] = self.popD['var']/ N0
+
+        if norm_time:
+            T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
+            T_b = T_b / T_b.max()
+            self.T_b = T_b
+        else:
+            T_b = self.popD['t']
+            T_b = T_b / T_b.min() 
+            self.T_b = T_b
         ###
         # set up params
         ### 
@@ -113,6 +122,31 @@ class MeshGrid(Dataset):
     def __len__(self):
         # repeat sampling for 10 times
         return self.s.shape[0] - self.nearby_cellstate
+
+    def compute_grid_density(self):
+
+        ub_ls = []
+        tb_ls = []
+        var_ls = []
+        
+        for tb_idx, t_b in enumerate(self.popD['t']):
+            
+            # subset ad_t
+            
+            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
+            ad_t = self.adata[cb_t].copy()
+            cellstate_t = ad_t.obsm[self.cellstate_key]
+            
+            # assess density and return 
+            density_fun = gaussian_kde(cellstate_t.T)
+            u  = density_fun(self.s)
+            n_exp = self.popD['n_lib'][tb_idx]
+                    
+            ub_ls.append(u * self.h_inv * self.popD['mean'][tb_idx])
+            tb_ls.append(np.full_like(u, self.T_b[tb_idx])) # add norm t
+            var_ls.append(self.popD['var'][tb_idx] /n_exp)
+        
+        return ub_ls, tb_ls, var_ls
 
 
     def resampling_by_density(self, n_samples, p=None):

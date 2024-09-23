@@ -197,6 +197,53 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
                                 ################################
                                 ## Trajectory Dependent  DS   ##
                                 ################################
+class SingleBranch_AnnDS(AnnDataset, MeshGrid):
+    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
+        """
+        Single branch system using pseudotime grid to span the all cell state space
+
+        Augment
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+        """
+        super().__init__(**kwargs)
+        self.n_repeat = n_repeat
+        self.nearby_cellstate = nearby_cellstate
+        self.h_inv = 1/self.n_grid
+
+        self.n_timepoint = n_timepoint
+        self.popD['t'] = self.popD['t'][:n_timepoint]
+
+        coords = np.linspace(0.01, 0.99, self.n_grid) # generate 1D uniform coord
+        self.s = torch.from_numpy(coords).float()
+
+        # density
+        self.cellstate = self.cellstate.flatten()
+        ub_ls, tb_ls, var_ls = self.compute_grid_density() # this is from MeshGrid
+
+        self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid)
+        # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
+        self.t_b = np.vstack(tb_ls)
+        self.pop_var = np.array(var_ls)  # (tb,)
+
+        
+        # observeds
+        
+        self.pop_mean = self.popD['mean'] # (tb,)
+        
+
+    def __len__(self):
+        return len(self.T_b)
+
+    def __getitem__(self, i):
+        # no resampling
+        s = self.s.clone().float()
+        t_b = torch.from_numpy(self.T_b).float()
+        u_b = torch.from_numpy(self.u_b).float()
+
+        return s, t_b, u_b
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
@@ -233,38 +280,12 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.cellstate = meshgrid_flat
         # self.meshs = self.s.reshape(self.n_grid,self.n_grid, -1) # from flatten to squared high-dim
 
-        h_inv = 1/np.prod([s[1] - s[0] for s in coords])
-
-        if norm_time:
-            T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
-            T_b = T_b / T_b.max()
-        else:
-            T_b = self.popD['t']
-            T_b = T_b / T_b.min() 
+        self.h_inv = 1/np.prod([s[1] - s[0] for s in coords])
         
         ###
         # set up boundary conditions
         ### 
-        ub_ls = []
-        tb_ls = []
-        var_ls = []
-        
-        for tb_idx, t_b in enumerate(self.popD['t']):
-            
-            # subset ad_t
-            
-            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
-            ad_t = self.adata[cb_t].copy()
-            cellstate_t = ad_t.obsm[self.cellstate_key]
-            
-            # assess density and return 
-            density_fun = gaussian_kde(cellstate_t.T)
-            u  = density_fun(meshgrid_flat.T)
-            n_exp = self.popD['n_lib'][tb_idx]
-                    
-            ub_ls.append(u / h_inv * self.popD['mean'][tb_idx])
-            tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
-            var_ls.append(self.popD['var'][tb_idx] /n_exp)
+        ub_ls, tb_ls, var_ls = self.compute_grid_density()
         
 
         self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid**2)
@@ -279,7 +300,6 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.pop_var = np.array(var_ls)  # (tb,)
         self.pop_mean = self.popD['mean'] # (tb,)
         self.T_b = self.popD['t']         # (tb,)
-        self.T_b = T_b    
     
 
 class MeshGrid_Resample(MeshGrid_AnnDS):

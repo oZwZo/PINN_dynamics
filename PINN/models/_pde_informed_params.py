@@ -12,7 +12,7 @@ from typing import Any, Union, Callable
 from torchdiffeq import odeint
 
 class pde_params_base(pl.LightningModule):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
         """
         mlp u theta
 
@@ -39,8 +39,7 @@ class pde_params_base(pl.LightningModule):
         self.lr = lr
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
-        self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
-        
+        self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
 
 
 
@@ -64,7 +63,7 @@ class pde_params_base(pl.LightningModule):
         x_hat = torch.clamp(x_hat, min=-24)
 
         if weight == None:
-            weight = (24+x)**3
+            weight = (24+x)**self.weight_intensity
             weight /= weight.sum()
 
         # compute loss
@@ -153,7 +152,7 @@ class pde_params_base(pl.LightningModule):
         
         # the second term : ∂/∂s[ v*u ]
         vu = self.mul(v, u)
-        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] #TODO:check shape
+        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] 
         
         # right hand side
         diffuse = d2Dds2.sum(dim=1)
@@ -350,24 +349,24 @@ class pde_params(pde_params_base):
              "total_loss":total_loss})
 
 
-class pde_params_singlebranch(pde_params_base):
-    """
-    Use cubic spline to fit g,v,D for single branch dataset
+class pde_singlebranch_twotimepoints(pde_params_base):
+    def __init__(self, n_grid=300, channels=11, lr=3e-4,  D_penalty = None, weight_intensity=None):
+        """
+        Use cubic spline to fit g,v,D for single branch dataset
 
-    Arguments:
-    -------------
-    [g, v, D]_channels : the number of cubic spline knots of the Behavior function
-    
-    kwargs 
-    -------
-    lr: float, the learning rate
-    optim_class : str, the optimizer used
-    D_penalty : float , default None the weight for penalizing D
-    """
-
-    def __init__(self, channels, n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
-        super().__init__(channels, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
-
+        Arguments:
+        -------------
+        [g, v, D]_channels : the number of cubic spline knots of the Behavior function
+        
+        kwargs 
+        -------
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        D_penalty : float , default None the weight for penalizing D
+        """
+        super().__init__(channels=channels, lr=lr,D_penalty = D_penalty,collapse_D = True, collapse_v = True, g_channels=channels, v_channels=channels, D_channels=channels, time_sensitive=True,  activation_fn='Tanh')
+        
+        self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
         self.n_grid = n_grid
         self.h = 1 / n_grid
         
@@ -403,16 +402,16 @@ class pde_params_singlebranch(pde_params_base):
         vu = torch.mul(v_hat, u_t)
         dvuds_dim = h_inv * torch.diff(vu)
         dvuds_dim_end = h_inv * (vu[-2] + vu[-1])  # the boundary
-        drift = torch.cat([dvuds_dim, dvuds_dim_end])
+        drift = torch.cat([dvuds_dim, dvuds_dim_end.reshape(1)])
             
         # discretize ∂(D∂u∂s)/∂s -> 1/h^2*[D_{i+1}(u_i+2 - u_i+1) - D_i(u_i+1 - u_i)]
         duds = h_inv * torch.diff(u_t)  # 299
-        D_duds = torch.mul(D_hat, duds) # 299
+        D_duds = torch.mul(D_hat[1:], duds) # 299
         diffusion_mid = h_inv**2 * torch.diff(D_duds) # 289 
 
         # diffusion at the boundary
-        diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0]))  
-        diffusion_end = h_inv**2 * (-1 * D_hat[-1] * (u_t[-1] - u_t[-2]))
+        diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0])).reshape(1)  
+        diffusion_end = h_inv**2 * (-1 * D_hat[-1] * (u_t[-1] - u_t[-2])).reshape(1)  
     
         diffusion = torch.cat([diffusion_start, diffusion_mid, diffusion_end])
 
@@ -431,66 +430,57 @@ class pde_params_singlebranch(pde_params_base):
         # s : n_grid, n_dimension
         # t_b : n_grid, n_timepoints, 1
         # u_b : n_grid, n_timepoints, 1
-        s, t_b, u_b = train_batch  #TODO: check new dataset
+        s, t_b, u_b = train_batch 
 
         # divided by 5 to reduce the integration time
-        #TODO: check new dataset
-        t_list = t_b[0].detach().clone().flatten() / 5  
+    
+        t_list = t_b.detach().clone().flatten() / 5  
 
         device = s.device
 
         
         # loss 2 : dynamics 
         # init_condition 
-        
-        log_utp1_loss = 0
-        D_norm = 0
-        it = 0
 
-        for t0, t1 in zip(t_list[:-1], t_list[1:]):
-            t1 = t1.detach().cpu().item()
-            t0 = t0.detach().cpu().item()
 
-            step_size = np.around((t1 - t0)/15, decimals=1).item() 
-            step_size = step_size if step_size > 0 else 0.05
+        it = np.random.choice(range(len(t_list)-1))
+        t1 = t_list[it+1].item()
+        t0 = t_list[it].item()
 
-            step_size = min(step_size, 0.4)
+        step_size = np.around((t1 - t0)/20, decimals=2).item() 
+        step_size = step_size if step_size > 0 else 0.05
 
-            ut0 = u_b[:,it]
-            utp1 = u_b[:,it+1]
+        step_size = min(step_size, 0.4)
 
-            # init condition : ut, s in a square, u in a square
-            init_condition = (ut0, s)
-            u_int, s = odeint(
-                        self.ode_func,
-                        init_condition,
-                        t_list.type(torch.float32).to(device),
-                        atol=1e-8,
-                        rtol=1e-8,
-                        method='midpoint',
-                        options = {'step_size': step_size}
-                    )
+        ut0 = u_b[it,:]
+        utp1 = u_b[it+1,:]
 
-            # boundary u of  the next timepoint
-            utp1_loss = self.loss_fn(u_int[-1], utp1)
-            u_int = nn.functional.relu(u_int)
+        # init condition : ut, s in a square, u in a square
+        init_condition = (ut0, s)
+        u_int, s_int = odeint(
+                    self.ode_func,
+                    init_condition,
+                    t_list.type(torch.float32).to(device),
+                    atol=1e-8,
+                    rtol=1e-8,
+                    method='midpoint',
+                    options = {'step_size': step_size}
+                )
 
-            log_utp1_loss += self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
+        # boundary u of  the next timepoint
+        utp1_loss = self.loss_fn(u_int[-1], utp1)
+        u_int = nn.functional.relu(u_int)
 
-            it+=1
+        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=None)
 
-            D_norm += self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
 
-        total_loss = log_utp1_loss + self.D_penalty * D_norm
+
+        D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
+
+        total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
 
 
         with torch.no_grad():
-            # self.log("residual_loss", Loss_r, on_epoch=True)
-            # self.log("boundary_loss", Loss_b, on_epoch=True)
-            # self.log("population_loss", Loss_p, on_epoch=True)
-            
-            # self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
-            # self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
             self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
             self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
             self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
@@ -523,11 +513,8 @@ class pde_params_meshgrid(pde_params_base):
         self.n_grid = n_grid
         self.h = 1 / n_grid
         
-        # if self.n_dim == 1:
-        #     Func_Module = CubicSpline
-        # elif not time_sensitive:
-        #     Func_Module = MultiDim_CubicSpline
-        # else:
+        
+        self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
         Func_Module = MLP_surrogate
         
         # the output for growth is always 1
