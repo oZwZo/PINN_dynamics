@@ -371,9 +371,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         self.h = 1 / n_grid
         
         n_knot = channels
-        self.g = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
-        self.v = CubicSpline(y = torch.ones(n_knot).float(), n_knot=n_knot)
-        self.D = CubicSpline(y = torch.zeros(n_knot).float(), n_knot=n_knot)
+        self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
     
     def ode_func(self, t, states): 
         
