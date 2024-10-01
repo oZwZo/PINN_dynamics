@@ -53,10 +53,10 @@ class pde_params_base(pl.LightningModule):
             x_hat = x_hat.squeeze()
         assert x.shape == x_hat.shape
  
-        if torch.all(x >0) :
-            x  = torch.log(x + 1e-9)
-        if torch.all(x_hat > 0):
-            x_hat  = torch.log(x_hat + 1e-9)
+        # if torch.all(x >0) :
+        #     x  = torch.log(x + 1e-9)
+        # if torch.all(x_hat > 0):
+        #     x_hat  = torch.log(x_hat + 1e-9)
         
         # -24 is ~ log(1e-9)
         x = torch.clamp(x, min=-24) 
@@ -471,6 +471,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         utp1_loss = self.loss_fn(u_int[-1], utp1)
         u_int = nn.functional.relu(u_int)
 
+        # with torch.no_grad():
+        #     weight = (torch.clamp(log_utp1, min=-24) + 24)**self.weight_intensity
+        #     weight /= weight.sum()
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=None)
 
 

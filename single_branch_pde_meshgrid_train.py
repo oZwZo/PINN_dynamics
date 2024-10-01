@@ -161,7 +161,7 @@ trainer = pl.Trainer(
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
-                    max_epochs=300,
+                    max_epochs=1000,
                     callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                 monitor="total_loss", mode="min", save_top_k=2)]
                     )
