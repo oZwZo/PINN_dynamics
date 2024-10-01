@@ -139,7 +139,7 @@ class MeshGrid(Dataset):
             
             # assess density and return 
             density_fun = gaussian_kde(cellstate_t.T)
-            u  = density_fun(self.s)
+            u  = density_fun(self.grid_cellstate)
             n_exp = self.popD['n_lib'][tb_idx]
                     
             ub_ls.append(u * self.h_inv * self.popD['mean'][tb_idx])
