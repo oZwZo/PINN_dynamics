@@ -217,7 +217,8 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         self.popD['t'] = self.popD['t'][:n_timepoint]
 
         coords = np.linspace(0.01, 0.99, self.n_grid) # generate 1D uniform coord
-        self.s = torch.from_numpy(coords).float()
+        self.s = coords
+        self.grid_cellstate = coords
 
         # density
         self.cellstate = self.cellstate.flatten()
@@ -239,7 +240,7 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
 
     def __getitem__(self, i):
         # no resampling
-        s = self.s.clone().float()
+        s = torch.from_numpy(self.s).clone().float()
         t_b = torch.from_numpy(self.T_b).float()
         u_b = torch.from_numpy(self.u_b).float()
 
@@ -278,8 +279,8 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         coords = [np.linspace(0.01, 0.99, self.n_grid) for i in range(self.n_dim)]  # generate 1D uniform coord
         meshgrid_flat = np.vstack([ay.flatten() for ay in  np.meshgrid(*coords)]).T
 
-        self.s = torch.from_numpy(meshgrid_flat).float()
-        self.cellstate = meshgrid_flat
+        self.s = meshgrid_flat
+        self.grid_cellstate = meshgrid_flat.T
         # self.meshs = self.s.reshape(self.n_grid,self.n_grid, -1) # from flatten to squared high-dim
 
         self.h_inv = 1/np.prod([s[1] - s[0] for s in coords])
@@ -378,13 +379,15 @@ class AllTimepoint_MeshGrid(MeshGrid_Resample):
             tb_i = np.random.choice(range(self.density_P.shape[0]))
             i = self.resampling_by_density(1, p=self.density_P[tb_i]).item()
 
-        s_bund = self.s[i,:].float()
+        s_bund = self.s[i,:].copy()
+        s_bund = torch.from_numpy(s_bund).float()
         t_b = torch.from_numpy(self.t_b[:, i]).float().unsqueeze(-1)
         u_b = torch.from_numpy(self.u_b[:, i]).float()
 
         squre_indexes = self.indexing_neighbormesh_center(i, neighborhood=3)
 
-        s_neighbor = self.s[squre_indexes].reshape(3,3,2).float()
+        s_neighbor = self.s[squre_indexes].reshape(3,3,2)
+        s_neighbor = torch.from_numpy(s_neighbor).float()
         u_neighbor = torch.from_numpy(self.u_b[:,squre_indexes]).reshape(-1, 3,3).float()
         return (s_bund,s_neighbor), t_b, (u_b, u_neighbor)
 

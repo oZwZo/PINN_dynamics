@@ -98,7 +98,7 @@ def density_by_time(u_b, u_pred_b, T_b, xlabel='cell state'):
 
     return fig, axs
 
-def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', cellstate_2='cellstate2', fig_kws=None):
+def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', cellstate_2='cellstate2', fill=True, fig_kws=None):
     r"""
     Visualize the observed and predicted 2D mesh grid density
 
@@ -127,9 +127,9 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
 
     # getting cell state coordinates
     if train_DS.s.shape[0] == train_DS.t_b.shape[0]:
-        s = train_DS.s[:n_grid*n_grid].numpy()   
+        s = train_DS.s[:n_grid*n_grid]   
     else:
-        s = train_DS.s.numpy()   
+        s = train_DS.s   
     XX = s[:,0].reshape(n_grid,n_grid)    # in DS, meshgrid is flatten
     YY = s[:,1].reshape(n_grid,n_grid)
 
@@ -156,10 +156,17 @@ def meshgrid_density_by_time(ub, ub_pred, train_DS, cellstate_1='cellstate1', ce
         # XX and YY is the output of meshgird
         # Z is of shape 50, 50
         Z_ub = ub[i].reshape(n_grid, n_grid)
-        axs[0,i].contour(XX,YY, Z_ub, cmap='Blues')
+        if fill:
+            axs[0,i].contourf(XX,YY, Z_ub, cmap='Blues')
+        else:
+            axs[0,i].contour(XX,YY, Z_ub, cmap='Blues')
 
         Z_pred = ub_pred[i].reshape(n_grid, n_grid)
-        axs[1,i].contour(XX,YY, Z_pred, cmap='Blues')
+        if fill:
+            axs[1,i].contourf(XX,YY, Z_pred, cmap='Blues')
+        else:
+            axs[1,i].contour(XX,YY, Z_pred, cmap='Blues')
+
 
         # set title
         axs[0,i].set_title("Day %d\n\nobserved density" %T)
