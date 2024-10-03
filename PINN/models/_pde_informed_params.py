@@ -423,12 +423,12 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         
         n_knot = channels
 
-        self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-0.1,0.1], symbolic_enabled=False)
-        self.v = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
-        self.D = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
-        # self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        # self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        # self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        # self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-0.1,0.1], symbolic_enabled=False)
+        # self.v = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
+        # self.D = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
+        self.g = CubicSpline(y = torch.rand(n_knot)*0.01, n_knot=n_knot)
+        self.v = CubicSpline(y = torch.rand(n_knot)*0.01, n_knot=n_knot)
+        self.D = CubicSpline(y = torch.zeros(n_knot), n_knot=n_knot)
     
     def ode_func(self, t, states): 
         
@@ -443,9 +443,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
 
         # infer the dynamics params with neural networks
         s_input = s.reshape(-1,1)
-        g_hat = self.g(s_input).squeeze(1)
-        D_hat = self.D(s_input).squeeze(1)
-        v_hat = self.v(s_input).squeeze(1)
+        g_hat = self.g(s,None)#.squeeze(1)
+        D_hat = self.D(s,None)#.squeeze(1)
+        v_hat = self.v(s,None)#.squeeze(1)
 
 
         # assume u_near is a square
@@ -463,7 +463,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # discretize ∂(D∂u∂s)/∂s -> 1/h^2*[D_{i+1}(u_i+2 - u_i+1) - D_i(u_i+1 - u_i)]
         duds = h_inv * torch.diff(u_t)  # 299
         D_duds = torch.mul(D_hat[1:], duds) # 299
-        diffusion_mid = h_inv**2 * torch.diff(D_duds) # 289 
+        diffusion_mid = h_inv * torch.diff(D_duds) # 298 
 
         # diffusion at the boundary
         diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0])).reshape(1)  
@@ -490,7 +490,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
 
         # divided by 5 to reduce the integration time
     
-        t_list = t_b.detach().clone().flatten() / 5  
+        t_list = t_b.detach().clone().flatten()  /5
 
         device = s.device
 
@@ -503,7 +503,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         t1 = t_list[it+1].item()
         t0 = t_list[it].item()
 
-        step_size = np.around((t1 - t0)/20, decimals=2).item() 
+        step_size = np.around((t1 - t0)/10, decimals=2).item() 
         step_size = step_size if step_size > 0 else 0.05
 
         step_size = min(step_size, 0.4)
@@ -512,6 +512,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         utp1 = u_b[it+1,:]
 
         # init condition : ut, s in a square, u in a square
+        N =  ut0.sum()
         init_condition = (ut0, s)
         u_int, s_int = odeint(
                     self.ode_func,
@@ -534,11 +535,11 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         
         
         area_loss = self.area_loss(utp1, u_int[-1])
-        pop_loss = self.population_loss(u_int[-1], mean[it+1], var[it+1])
+        pop_loss = self.population_loss(u_int[-1]/N, mean[it+1]/N, var[it+1]/N)
 
 
         s_input = s.reshape(-1,1)
-        D_norm = self.restrict_D(s_input, torch.full(utp1.shape, t1).to(device))
+        D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
 
         # total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
         total_loss = area_loss + pop_loss + self.D_penalty * D_norm
