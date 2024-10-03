@@ -243,7 +243,9 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         t_b = torch.from_numpy(self.T_b).float()
         u_b = torch.from_numpy(self.u_b).float()
 
-        return s, t_b, u_b
+        mean = torch.from_numpy(self.pop_mean).float()
+        var = torch.from_numpy(self.pop_var).float()
+        return s, t_b, u_b, mean, var
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):

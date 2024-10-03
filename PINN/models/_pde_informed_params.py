@@ -10,6 +10,7 @@ from .MLP_models import MLP_surrogate
 from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
 from torchdiffeq import odeint
+from kan import KAN
 
 class pde_params_base(pl.LightningModule):
     def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
@@ -40,6 +41,8 @@ class pde_params_base(pl.LightningModule):
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
+
+        self.PopL_fn = nn.GaussianNLLLoss()                     # for population loss
 
 
 
@@ -170,6 +173,54 @@ class pde_params_base(pl.LightningModule):
         D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
         return D_L2 
 
+    def area_loss(self, u, u_hat):
+        """
+        use the area under curve to compute loss 
+
+        Arguments
+        ---------
+        u : tensor (n_grid,)
+        u_hat : tensor (n_grid,)
+        """
+        p_x = u / u.sum()
+        p_hat = u_hat / u_hat.sum()
+
+        area_x = torch.cumsum(p_x,dim=0)
+        area_hat = torch.cumsum(p_hat, dim=0)
+
+        return torch.pow(area_x - area_hat,2).sum()
+
+    def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
+        """
+        the loss term defined for population size, governed by Gaussian Negative Likelihood loss
+            Gaussian NLL := 0.5 * log(var) + 0.5 * (input - target)**2/var  +const
+        
+        Arguments
+        ---------
+        u_pred : Tensor (t_obs, n_grid), the predicted density for all the cell states, self.u_theta(s_all, t_obs)
+        Mean : Tensor (t_obs, 1), D['pop']['mean'], the mean of population size over repeat
+        Var : Tensor (t_obs, 1), D['pop']['var'] / D['pop']['n_exp'] , the var of population size over repeat
+        
+        Return
+        ---------
+        L_pop : Tensor (1,), loss term summing all observed time point
+        """
+        
+        # copying
+        # assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
+        
+        # the estimated population size N_θ = ∫ u ds
+        # N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
+        N_theta = u_pred.sum()
+        # (t_obs, n_grid) -> (t_obs,1)
+        
+        # population 
+        assert N_theta.shape == Mean.shape, 'input and target view not identical'
+        
+        # compute loss and sum for all observed time point
+        L_pop = self.PopL_fn(input=N_theta, target=Mean, var=Var)**0.5
+
+        return L_pop
 
 class pde_params(pde_params_base):
     def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
@@ -371,9 +422,13 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         self.h = 1 / n_grid
         
         n_knot = channels
-        self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+
+        self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-0.1,0.1], symbolic_enabled=False)
+        self.v = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
+        self.D = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
+        # self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        # self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        # self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
     
     def ode_func(self, t, states): 
         
@@ -387,9 +442,10 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         h_inv =  1/self.h
 
         # infer the dynamics params with neural networks
-        g_hat = self.g(s, None)
-        D_hat = self.D(s, None)
-        v_hat = self.v(s, None)
+        s_input = s.reshape(-1,1)
+        g_hat = self.g(s_input).squeeze(1)
+        D_hat = self.D(s_input).squeeze(1)
+        v_hat = self.v(s_input).squeeze(1)
 
 
         # assume u_near is a square
@@ -430,7 +486,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # s : n_grid, n_dimension
         # t_b : n_grid, n_timepoints, 1
         # u_b : n_grid, n_timepoints, 1
-        s, t_b, u_b = train_batch 
+        s, t_b, u_b, mean, var = train_batch 
 
         # divided by 5 to reduce the integration time
     
@@ -460,7 +516,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         u_int, s_int = odeint(
                     self.ode_func,
                     init_condition,
-                    t_list.type(torch.float32).to(device),
+                    torch.Tensor([t0,t1]).type(torch.float32).to(device),
                     atol=1e-8,
                     rtol=1e-8,
                     method='midpoint',
@@ -471,16 +527,21 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         utp1_loss = self.loss_fn(u_int[-1], utp1)
         u_int = nn.functional.relu(u_int)
 
-        # with torch.no_grad():
-        #     weight = (torch.clamp(log_utp1, min=-24) + 24)**self.weight_intensity
-        #     weight /= weight.sum()
-        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=None)
+        with torch.no_grad():
+            weight = (torch.clamp(torch.log(utp1+1e-10), min=-24) + 24)**self.weight_intensity
+            weight /= weight.sum()
+        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
+        
+        
+        area_loss = self.area_loss(utp1, u_int[-1])
+        pop_loss = self.population_loss(u_int[-1], mean[it+1], var[it+1])
 
 
+        s_input = s.reshape(-1,1)
+        D_norm = self.restrict_D(s_input, torch.full(utp1.shape, t1).to(device))
 
-        D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
-
-        total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
+        # total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
+        total_loss = area_loss + pop_loss + self.D_penalty * D_norm
 
 
         with torch.no_grad():
