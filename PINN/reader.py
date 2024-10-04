@@ -213,8 +213,8 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         self.nearby_cellstate = nearby_cellstate
         self.h_inv = 1/self.n_grid
 
-        self.n_timepoint = n_timepoint
         self.popD['t'] = self.popD['t'][:n_timepoint]
+        self.n_timepoint = len(self.popD['t'])
 
         coords = np.linspace(0.01, 0.99, self.n_grid) # generate 1D uniform coord
         self.s = coords
@@ -227,26 +227,33 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid)
         # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
         self.t_b = np.vstack(tb_ls)
-        self.pop_var = np.array(var_ls)  # (tb,)
-
         
         # observeds
-        
         self.pop_mean = self.popD['mean'] # (tb,)
-        
+        self.pop_var = np.array(var_ls)  # (tb,)
+
+        # timepoint pair:
+        self.timpoint_pairs_index = []
+        for span in range(1,self.n_timepoint):  # [1, N_t -1]
+            for start in range(self.n_timepoint-span):
+                self.timpoint_pairs_index.append( [start, start+span] )
+
 
     def __len__(self):
-        return len(self.T_b)
+        return len(self.timpoint_pairs_index)
 
     def __getitem__(self, i):
         # no resampling
+
+        indexs = torch.Tensor(self.timpoint_pairs_index[i]).long()
+
         s = torch.from_numpy(self.s).clone().float()
         t_b = torch.from_numpy(self.T_b).float()
         u_b = torch.from_numpy(self.u_b).float()
 
         mean = torch.from_numpy(self.pop_mean).float()
         var = torch.from_numpy(self.pop_var).float()
-        return s, t_b, u_b, mean, var
+        return s, t_b, u_b, mean, var, indexs
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):

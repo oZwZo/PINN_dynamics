@@ -79,7 +79,7 @@ def reduce_batchdim(batch):
     return batch
 
 batch_size = 1
-train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=True, collate_fn=reduce_batchdim)
+train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=3, shuffle=False, collate_fn=reduce_batchdim)
 
 
                             ###                  ###
@@ -168,4 +168,4 @@ trainer = pl.Trainer(
 
 # start training
 Pdyn_model.train()
-trainer.fit(Pdyn_model, train_DL, ckpt_path = args.pretrained)
+trainer.fit(Pdyn_model, train_dataloaders=train_DL, val_dataloaders=train_DL, ckpt_path = args.pretrained)

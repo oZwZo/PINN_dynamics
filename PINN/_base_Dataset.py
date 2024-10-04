@@ -63,6 +63,10 @@ class AnnDataset(Dataset):
             self.T_b = T_b
         else:
             T_b = self.popD['t']
+            # if T_b.max() / T_b.min() > 5:
+            #     T_b = T_b / T_b.min() 
+            # else:
+            #     T_b = T_b - T_b.min() 
             T_b = T_b / T_b.min() 
             self.T_b = T_b
         ###
@@ -144,7 +148,7 @@ class MeshGrid(Dataset):
                     
             ub_ls.append(u * self.h_inv * self.popD['mean'][tb_idx])
             tb_ls.append(np.full_like(u, self.T_b[tb_idx])) # add norm t
-            var_ls.append(self.popD['var'][tb_idx] /n_exp)
+            var_ls.append(self.popD['var'][tb_idx]**2 /n_exp)
         
         return ub_ls, tb_ls, var_ls
 
