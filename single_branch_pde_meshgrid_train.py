@@ -79,7 +79,7 @@ def reduce_batchdim(batch):
     return batch
 
 batch_size = 1
-train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=3, shuffle=False, collate_fn=reduce_batchdim)
+train_DL = DataLoader(train_DS, batch_size=batch_size, num_workers=10, shuffle=False, collate_fn=reduce_batchdim)
 
 
                             ###                  ###
@@ -157,7 +157,7 @@ trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
-                    gradient_clip_val=300,
+                    gradient_clip_val=30,
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],

@@ -441,7 +441,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-0.1,0.1], symbolic_enabled=False)
         # self.v = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
         # self.D = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
-        self.g = CubicSpline(y = torch.rand(n_knot)*0.01, n_knot=n_knot)
+        self.g = CubicSpline(y = torch.rand(n_knot)*0.05, n_knot=n_knot)
         self.v = CubicSpline(y = torch.rand(n_knot)*0.01, n_knot=n_knot)
         self.D = CubicSpline(y = torch.zeros(n_knot), n_knot=n_knot)
     
@@ -609,13 +609,15 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         
         area_loss = self.area_loss(utp1, u_int[-1])
         distribution_loss = self.distribution_loss(utp1, u_int[-1])
-        pop_loss = self.population_loss(u_int[-1]/N, mean[itp1]/N, var[itp1]/N)
+        pop_loss = self.population_loss(u_int[-1]/N, mean[itp1]/N, var[itp1]/N**2)
+        pop_loss = torch.clamp(pop_loss, max=1000)
 
 
         s_input = s.reshape(-1,1)
         D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
 
         # total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
+
         total_loss = area_loss +  pop_loss + self.D_penalty * D_norm
         # distribution_loss +
 
@@ -679,7 +681,10 @@ class pde_singlebranch_twotimepoints(pde_params_base):
                 
                 area_loss += self.area_loss(u_b_t, u_int[i])
                 distribution_loss += self.distribution_loss(u_b_t, u_int[i])
-                pop_loss += self.population_loss(u_int[i]/N_t, mean[i]/N_t, var[i]/N_t)
+                pop_loss_t = self.population_loss(u_int[i]/N_t, mean[i]/N_t, var[i]/N_t**2)
+                pop_loss_t = torch.clamp(pop_loss_t, max=1000)
+                pop_loss += pop_loss_t 
+                
 
 
             total_loss = area_loss + pop_loss #+ self.D_penalty * D_norm
