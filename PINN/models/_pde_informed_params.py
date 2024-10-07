@@ -165,11 +165,13 @@ class pde_params_base(pl.LightningModule):
         return dudt, growth, drift, diffuse
     
 
-    def restrict_D(self, s, t):
+    def restrict_D(self, s, t, exp=True):
         """
         penalize D to restrict instability
         """
         D = self.D(s,t)
+        if exp:
+            D = torch.exp(D)
         D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
         return D_L2 
 
@@ -189,6 +191,21 @@ class pde_params_base(pl.LightningModule):
         area_hat = torch.cumsum(p_hat, dim=0)
 
         return torch.pow(area_x - area_hat,2).sum()
+
+    def density_loss(self, u, u_hat):
+        """
+        use the density itself to compute
+
+        Arguments
+        ---------
+        p_x : tensor (n_grid,)
+        p_hat : tensor (n_grid,)
+        """
+
+        p_x = u / u.sum()
+        p_hat = u_hat / u_hat.sum()
+
+        return torch.pow(p_x - p_hat,2).sum()
 
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
@@ -363,7 +380,7 @@ class pde_params(pde_params_base):
 
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
 
-        D_norm = self.restrict_D(s,t)
+        D_norm = self.restrict_D(s, t, exp=True)
 
         total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm
 
@@ -434,68 +451,25 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
         self.n_grid = n_grid
-        self.h = 1 / n_grid
+        grid = np.linspace(0, 1, n_grid)
+        self.h_inv = 1 / (grid[1] - grid[0])
         
         n_knot = channels
 
-        # self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-0.1,0.1], symbolic_enabled=False)
-        # self.v = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
-        # self.D = KAN(width=[1,1], grid=11, k=3, seed=42, symbolic_enabled=False)
-        self.g = CubicSpline(y = torch.rand(n_knot)*0.05, n_knot=n_knot)
-        self.v = CubicSpline(y = torch.rand(n_knot)*0.01, n_knot=n_knot)
-        self.D = CubicSpline(y = torch.zeros(n_knot), n_knot=n_knot)
+        # self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[1,1.5], symbolic_enabled=False)
+        # self.v = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-4,-3], symbolic_enabled=False)
+        # self.D = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-9,-6], symbolic_enabled=False)
+        self.g = CubicSpline(y = torch.full((n_knot,), fill_value=0.95) + torch.rand(n_knot)*0.5, n_knot=n_knot)
+        self.v = CubicSpline(y = torch.full((n_knot,), fill_value=-3.0) + torch.rand(n_knot)*0.5, n_knot=n_knot)
+        self.D = CubicSpline(y = torch.full((n_knot,), fill_value=-9.0) + torch.rand(n_knot)*0.1, n_knot=n_knot)
     
-    def ode_func_old(self, t, states):
-        u_t = states[0]     # : 300
-        s = states[1]       # : 300
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            [module.parameters() for module in  [self.g, self.v, self.D]],
+            # self.parameters(),
+                lr=self.lr)
+        return optimizer
 
-        # TO get some hyper,s
-        device = s.device
-        batch_size = s.shape[0]  # s: 300
-        h_inv =  1/self.h
-
-        # infer the dynamics params with neural networks
-        s_input = s.reshape(-1,1)
-        g_hat = self.g(s,None)#.squeeze(1)
-        D_hat = self.D(s,None)#.squeeze(1)
-        v_hat = self.v(s,None)#.squeeze(1)
-
-        v_hat = torch.exp(v_hat) # v can only be positive
-
-
-        # assume u_near is a square
-        assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
-
-        # growth is simply the product g*u
-        growth = torch.mul(g_hat, u_t)    
-        
-        # discretize ∂vu/∂s -> 1/h*[v_{i+1} u_{i+1} - v_i u_i]
-        vu = torch.mul(v_hat, u_t)
-        dvuds_dim = h_inv * torch.diff(vu)
-        dvuds_dim_end = h_inv * (vu[-2] + vu[-1])  # the boundary
-        drift = torch.cat([dvuds_dim, dvuds_dim_end.reshape(1)])
-
-            
-        # discretize ∂(D∂u∂s)/∂s -> 1/h^2*[D_{i+1}(u_i+2 - u_i+1) - D_i(u_i+1 - u_i)]
-        duds = h_inv * torch.diff(u_t)  # 299
-        D_duds = torch.mul(D_hat[1:], duds) # 299
-        diffusion_mid = h_inv * torch.diff(D_duds) # 298 
-        
-        # diffusion at the boundary
-        diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0])).reshape(1)  
-        diffusion_end = h_inv**2 * (-1 * D_hat[-1] * (u_t[-1] - u_t[-2])).reshape(1)  
-    
-        diffusion = torch.cat([diffusion_start, diffusion_mid, diffusion_end])
-
-        assert growth.shape == drift.shape
-        assert growth.shape == diffusion.shape
-
-        # the equation
-        dudt = growth - drift + diffusion
-
-        dsdt = torch.zeros_like(s).to(device)
-
-        return (dudt, dsdt)
 
     def ode_func(self, t, states): 
         
@@ -507,7 +481,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # TO get some hyper,s
         device = s.device
         batch_size = s.shape[0]  # s: 300
-        h_inv =  1/self.h
+        h2inv =  self.h_inv**2
 
         # infer the dynamics params with neural networks
         s_input = s.reshape(-1,1)
@@ -516,7 +490,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         v_hat = self.v(s,None)#.squeeze(1)
 
         v_hat = torch.exp(v_hat) # v can only be positive
-
+        D_hat = torch.exp(D_hat)
 
         # assume u_near is a square
         assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
@@ -526,18 +500,22 @@ class pde_singlebranch_twotimepoints(pde_params_base):
 
         # discretized drift with boundary
         drift = torch.zeros_like(u_t)
-        drift[0] = v_hat[0] * 0.5 * (u_t[0] + u_t[1]) * h_inv
-        drift[-1] = -1 * v_hat[-1] * 0.5 * (u_t[-2] + u_t[-1]) * h_inv
+        drift[0] = v_hat[0] * 0.5 * (u_t[0] + u_t[1]) * self.h_inv
+        drift[-1] = -1 * v_hat[-1] * 0.5 * (u_t[-2] + u_t[-1]) * self.h_inv
+        # vb1(end)*1/2*(x(n_grid-2)+x(n_grid-1))*sqrt(h2inv)
 
         for i in range(1, self.n_grid-1):
-            drift[i] = h_inv * 0.5 * (v_hat[i - 1] * (u_t[i - 1] + u_t[i]) - v_hat[i] * (u_t[i] + u_t[i + 1]))
+            # sqrt(h2inv)*1/2*(vb1(i-1)*(x(i-1)+x(i))-vb1(i)*(x(i)+x(i+1))) # remember to invert
+            drift[i] = self.h_inv * 0.5 * (v_hat[i] * (u_t[i] + u_t[i + 1]) - v_hat[i - 1] * (u_t[i - 1] + u_t[i]) )
         
         # discretized diffusion with boundary
         diffusion = torch.zeros_like(u_t)
-        diffusion[0] = -1 * h_inv**2 * (D_hat[0] * (u_t[0] - u_t[1])) 
-        diffusion[-1] = h_inv**2 * (D_hat[-1] * (u_t[-2] - u_t[-1]))
+        diffusion[0] = -1 * h2inv * (D_hat[0] * (u_t[0] - u_t[1])) 
+        diffusion[-1] = h2inv * (D_hat[-1] * (u_t[-2] - u_t[-1]))
         for i in range(1, self.n_grid-1):
-            diffusion[i] = h_inv**2 * (D_hat[i - 1] * (u_t[i - 1] - u_t[i]) - D_hat[i] * (u_t[i] - u_t[i + 1]))
+            diffusion[i] = h2inv * (D_hat[i - 1] * (u_t[i - 1] - u_t[i]) - D_hat[i] * (u_t[i] - u_t[i + 1]))
+
+            # h2inv*(Db1(i-1)*(x(i-1)-x(i))-Db1(i)*(x(i)-x(i+1)))
 
 
         assert growth.shape == drift.shape
@@ -563,7 +541,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
 
         # divided by 5 to reduce the integration time
     
-        t_list = t_b.detach().clone().flatten()  /5
+        t_list = t_b.detach().clone().flatten()
 
         device = s.device
 
@@ -609,7 +587,12 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         
         area_loss = self.area_loss(utp1, u_int[-1])
         distribution_loss = self.distribution_loss(utp1, u_int[-1])
-        pop_loss = self.population_loss(u_int[-1]/N, mean[itp1]/N, var[itp1]/N**2)
+
+        if var[itp1] < 1:
+            var_base = torch.Tensor([1.0]).to(mean.device)
+        else:
+            var_base = var[itp1]
+        pop_loss = self.population_loss(u_int[-1], mean[itp1], var_base)
         pop_loss = torch.clamp(pop_loss, max=1000)
 
 
@@ -681,22 +664,78 @@ class pde_singlebranch_twotimepoints(pde_params_base):
                 
                 area_loss += self.area_loss(u_b_t, u_int[i])
                 distribution_loss += self.distribution_loss(u_b_t, u_int[i])
-                pop_loss_t = self.population_loss(u_int[i]/N_t, mean[i]/N_t, var[i]/N_t**2)
+                if var[i] < 1:
+                    var_base = torch.Tensor([1.0]).to(mean.device)
+                else:
+                    var_base = var[i]
+                pop_loss_t = self.population_loss(u_int[i], mean[i], var_base)
+                # print(i, self.population_loss(u_int[i], mean[i], var[i]))
                 pop_loss_t = torch.clamp(pop_loss_t, max=1000)
                 pop_loss += pop_loss_t 
                 
 
-
             total_loss = area_loss + pop_loss #+ self.D_penalty * D_norm
 
 
-        with torch.no_grad():
             self.log("area_loss", area_loss.item(),  on_epoch=True)
             self.log("pop_loss", pop_loss.item(), on_epoch=True)
             self.log("kld_loss", distribution_loss.item(), on_epoch=True)
             self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
 
         return total_loss
+
+    def ode_func_old(self, t, states):
+        u_t = states[0]     # : 300
+
+        s = states[1]       # : 300
+
+        # TO get some hyper,s
+        device = s.device
+        batch_size = s.shape[0]  # s: 300
+        h2inv =  self.h_inv**2
+
+        # infer the dynamics params with neural networks
+        s_input = s.reshape(-1,1)
+        g_hat = self.g(s,None)#.squeeze(1)
+        D_hat = self.D(s,None)#.squeeze(1)
+        v_hat = self.v(s,None)#.squeeze(1)
+
+        v_hat = torch.exp(v_hat) # v can only be positive
+
+
+        # assume u_near is a square
+        assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
+
+        # growth is simply the product g*u
+        growth = torch.mul(g_hat, u_t)    
+        
+        # discretize ∂vu/∂s -> 1/h*[v_{i+1} u_{i+1} - v_i u_i]
+        vu = torch.mul(v_hat, u_t)
+        dvuds_dim = self.h_inv * torch.diff(vu)
+        dvuds_dim_end = self.h_inv * (vu[-2] + vu[-1])  # the boundary
+        drift = torch.cat([dvuds_dim, dvuds_dim_end.reshape(1)])
+
+            
+        # discretize ∂(D∂u∂s)/∂s -> 1/h^2*[D_{i+1}(u_i+2 - u_i+1) - D_i(u_i+1 - u_i)]
+        duds = h_inv * torch.diff(u_t)  # 299
+        D_duds = torch.mul(D_hat[1:], duds) # 299
+        diffusion_mid = h_inv * torch.diff(D_duds) # 298 
+        
+        # diffusion at the boundary
+        diffusion_start = h_inv**2 * (D_hat[0] * (u_t[1] - u_t[0])).reshape(1)  
+        diffusion_end = h_inv**2 * (-1 * D_hat[-1] * (u_t[-1] - u_t[-2])).reshape(1)  
+    
+        diffusion = torch.cat([diffusion_start, diffusion_mid, diffusion_end])
+
+        assert growth.shape == drift.shape
+        assert growth.shape == diffusion.shape
+
+        # the equation
+        dudt = growth - drift + diffusion
+
+        dsdt = torch.zeros_like(s).to(device)
+
+        return (dudt, dsdt)
 
 class pde_params_meshgrid(pde_params_base):
     """
