@@ -57,9 +57,16 @@ class AnnDataset(Dataset):
             self.popD['mean'] = self.popD['mean'] / N0
             self.popD['var'] = self.popD['var']/ N0
 
-        if norm_time:
+        if norm_time == 'log':
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
             T_b = T_b / T_b.max()
+            self.T_b = T_b
+        elif norm_time == 'min_minus':
+            T_b = self.popD['t']
+            # if T_b.max() / T_b.min() > 5:
+            #     T_b = T_b / T_b.min() 
+            # else:
+            T_b = T_b - T_b.min() 
             self.T_b = T_b
         else:
             T_b = self.popD['t']
@@ -118,6 +125,7 @@ class MeshGrid(Dataset):
         self.nearby_cellstate =None
         self.u_b = None
         self.mesh_ub = None
+        self.replicate_key = None
 
     def __len__(self):
         # repeat sampling for 10 times
@@ -128,25 +136,38 @@ class MeshGrid(Dataset):
         ub_ls = []
         tb_ls = []
         var_ls = []
+        hist_var_ls = []
+        area_var_ls = []
         
         for tb_idx, t_b in enumerate(self.popD['t']):
             
             # subset ad_t
             
-            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
-            ad_t = self.adata[cb_t].copy()
-            cellstate_t = ad_t.obsm[self.cellstate_key]
+            obs_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b")
+            rep_at_t = obs_t[self.replicate_key].unique()
             
-            # assess density and return 
-            density_fun = gaussian_kde(cellstate_t.T)
-            u  = density_fun(self.grid_cellstate)
-            n_exp = self.popD['n_lib'][tb_idx]
+            u_t = []
+            for rep in rep_at_t:
+                cb_t = obs_t.query(f"`{self.replicate_key}` == @rep").index
+                ad_t = self.adata[cb_t].copy()
+                cellstate_t = ad_t.obsm[self.cellstate_key]
+                
+                # assess density and return 
+                density_fun = gaussian_kde(cellstate_t.T)
+                u  = density_fun(self.grid_cellstate)
+                n_exp = self.popD['n_lib'][tb_idx]
+                u_t.append(u * self.h_inv )
+            
+            u_t = np.vstack(u_t)
+            area_t = u_t.cumsum(axis=1)
                     
-            ub_ls.append(u * self.h_inv * self.popD['mean'][tb_idx])
+            ub_ls.append(u_t.mean(axis=0))
+            hist_var_ls.append(u_t.var(axis=0)/n_exp)
+            area_var_ls.append(area_t.var(axis=0)/n_exp)
             tb_ls.append(np.full_like(u, self.T_b[tb_idx])) # add norm t
-            var_ls.append(self.popD['var'][tb_idx] /n_exp)
+            var_ls.append(self.popD['var'][tb_idx]**2 /n_exp)
         
-        return ub_ls, tb_ls, var_ls
+        return ub_ls, hist_var_ls, area_var_ls, tb_ls, var_ls
 
 
     def resampling_by_density(self, n_samples, p=None):
