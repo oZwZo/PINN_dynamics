@@ -81,20 +81,22 @@ def density_by_time(u_b, u_pred_b, T_b, xlabel='cell state'):
     axs[0].set_ylabel('density')
     
     plt.legend(ncol=2)
-    fig, axs = plt.subplots(int(np.ceil(len(T_b)/2)), 2, figsize=(6,6), sharex=True, 
-                        gridspec_kw={'hspace':0.4},  dpi=300)
+
+    n_col = int(np.ceil(len(T_b)/2))
+    fig, axs = plt.subplots(2 ,n_col, figsize=(n_col*4,6), sharex=True, 
+                        gridspec_kw={'hspace':0.4},  dpi=200)
     axs = axs.flatten()
 
     for i,t in enumerate(T_b):
         axs[i].plot(cell_state, u_b[i],  label='observed')
-        axs[i].plot(cell_state, u_pred_b[i], '--', label='pred')
+        axs[i].plot(cell_state, u_pred_b[i],  label='pred')
         axs[i].set_title('day %s'%t)
-        if i%2 ==0 :
+        if i%n_col ==0 :
             axs[i].set_ylabel("density")
+        
+        axs[i].set_xlabel(xlabel)
 
     axs[0].legend()
-    axs[-2].set_xlabel(xlabel)
-    axs[-1].set_xlabel(xlabel)
 
     return fig, axs
 

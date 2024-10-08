@@ -13,7 +13,7 @@ class MLP_surrogate(nn.Module):
     def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
 
         super().__init__()
-        self.time_sensitive = True
+        self.time_sensitive = True # default 
 
         ### activation function check
 
@@ -41,24 +41,26 @@ class MLP_surrogate(nn.Module):
     def forward(self, s, t) -> torch.Tensor:
         
         # a lot of sanity check
-        if not isinstance(s, torch.Tensor):
-            s = torch.tensor(s, requires_grad=True)
-        if not isinstance(t, torch.Tensor):
-            t = torch.tensor(t, requires_grad=True)
+        if self.time_sensitive:
+            if not isinstance(s, torch.Tensor):
+                s = torch.tensor(s, requires_grad=True)
+            if not isinstance(t, torch.Tensor):
+                t = torch.tensor(t, requires_grad=True)
 
-        #  check input shape
-        if len(t.shape) == len(s.shape)-1: 
-            # t is just flatten but s is high dimensional
-            t = t.unsqueeze(-1)
+            #  check input shape
+            if len(t.shape) == len(s.shape)-1: 
+                # t is just flatten but s is high dimensional
+                t = t.unsqueeze(-1)
 
-        if type(t) == int:
-            t = torch.full_like(s, fill_value=t, device=s.device, requires_grad=s.requires_grad)
-        # if t.shape[-1] != 1:
-        #     t = t.unsqueeze(-1)
+            if type(t) == int:
+                t = torch.full_like(s, fill_value=t, device=s.device, requires_grad=s.requires_grad)
+            # if t.shape[-1] != 1:
+            #     t = t.unsqueeze(-1)
 
-        assert len(s.shape) == len(t.shape), "make sure s and t has the same shape"
-        input = torch.cat([s,t], dim=-1)
-
+            assert len(s.shape) == len(t.shape), "make sure s and t has the same shape"
+            input = torch.cat([s,t], dim=-1)
+        else:
+            input = s
         out = self.u_theta(input)
         return out.squeeze(-1)  # -> (B, n_grid)
 

@@ -9,7 +9,9 @@ from ._PINN_base import PINN_base, PINN_base_sim
 from .MLP_models import MLP_surrogate
 from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
-from torchdiffeq import odeint
+# from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint as odeint
+from TorchDiffEqPack import odesolve_adjoint_sym12
 from kan import KAN
 import matplotlib.pyplot as plt
 
@@ -248,7 +250,7 @@ class pde_params_base(pl.LightningModule):
         
         # the estimated population size N_θ = ∫ u ds
         # N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
-        N_theta = u_pred.sum()
+        N_theta = u_pred[:-1].sum()
         # (t_obs, n_grid) -> (t_obs,1)
         
         # population 
@@ -517,10 +519,19 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         axs[3].plot(s, D_hat)
         axs[3].set_title(f"D^")
 
-        fig.savefig("/home/wergillius/Project/PINN_dynamics/results/singlebranch_dudt_plots/t={:.3f}-e={}.png".format(t, self.current_epoch))
+        try:
+            dir_path = self.trainer.checkpoint_callback.dirpath
+            version = dir_path.split("/")[-2]
+        except:
+            version = 'Eval'
+        
+        save_path = f"/home/wergillius/Project/PINN_dynamics/results/singlebranch_dudt_plots/{version}/"
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
+        fig.savefig(save_path+"t={:.3f}-e={}.png".format(t, self.current_epoch))
 
 
-    def ode_func(self, t, states): 
+    def ode_func(self, t, states, plotting_prob=1e-2): 
         
         
         u_t = states[0]     # : 300
@@ -541,7 +552,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         v_hat = torch.exp(v_hat) # v can only be positive
         D_hat = torch.exp(D_hat)
 
-        if np.random.random() < 1e-3:
+        if np.random.random() < plotting_prob:
             self.plot_u_dt(t, s, u_t, g_hat, v_hat, D_hat)
 
         # assume u_near is a square
@@ -581,6 +592,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         dsdt = torch.zeros_like(s).to(device)
 
         return (dudt, dsdt)
+
+    def forward(self,t, states):
+        return self.ode_func(t, states, plotting_prob=0)
 
     def training_step(self, train_batch, index):
         
@@ -624,7 +638,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         N =  ut0.sum()
         init_condition = (ut0, s)
         u_int, s_int = odeint(
-                    self.ode_func,
+                    self,
                     init_condition,
                     torch.Tensor([t0,t1]).type(torch.float32).to(device),
                     atol=1e-6,
@@ -853,6 +867,9 @@ class pde_params_meshgrid(pde_params_base):
             D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
         self.D = Func_Module(channels = D_channels, activation_fn=activation_fn)
 
+        self.g.time_sensitive = time_sensitive
+        self.v.time_sensitive = time_sensitive
+        self.D.time_sensitive = time_sensitive
 
 
     def mesh_grid_equation(self, s, t, u, h):
@@ -878,6 +895,7 @@ class pde_params_meshgrid(pde_params_base):
         diffusion = 0
 
         # infer the dynamics params with neural networks
+
         g_nearby = self.g(s_nearby, torch.broadcast_to(t, u_nearby.shape))
         D_nearby = self.D(s_nearby, torch.broadcast_to(t, u_nearby.shape))
         v_nearby = self.v(s_nearby, torch.broadcast_to(t, u_nearby.shape))
@@ -988,8 +1006,9 @@ class pde_params_meshgrid(pde_params_base):
                         t_list.type(torch.float32).to(device),
                         atol=1e-8,
                         rtol=1e-8,
-                        method='midpoint',
-                        options = {'step_size': step_size}
+                        # method='midpoint',
+                        method='dopri5',
+                        # options = {'step_size': step_size}
                     )
 
             # boundary u of  the next timepoint
@@ -1039,6 +1058,9 @@ class pde_neighborloss(pde_params_meshgrid):
         # the v and D of each dimesion
         drift = 0
         diffusion = 0
+
+        if not isinstance(t, torch.Tensor):
+            t = torch.Tensor([t]).float().to(s_nearby.device)
 
         # infer the dynamics params with neural networks
         g_nearby = self.g(s_nearby, torch.broadcast_to(t, u_nearby.shape))
@@ -1090,6 +1112,9 @@ class pde_neighborloss(pde_params_meshgrid):
 
         return dsdt, dudt
 
+    def forward(self, t, states):
+        return self.ode_func(t, states)
+
     def training_step(self, train_batch, index):
         
         # s : batch, n_dimension
@@ -1124,15 +1149,37 @@ class pde_neighborloss(pde_params_meshgrid):
 
         # init condition : ut, s in a square, u in a square
         init_condition = (s_neighbor, u_neighbor_t0)
-        _, u_neighbor_int = odeint(
-                    self.ode_func,
+        # _, u_neighbor_int = odeint(
+        #             self,
+        #             init_condition,
+        #             torch.tensor([t0,t1]).float().to(device),
+        #             atol=1e-3,
+        #             rtol=1e-3,
+        #             method='dopri5',
+        #             adjoint_options={'norm':'seminorm'},
+        #             # options = {'step_size': step_size}
+        #         )
+        options = {
+                'method': 'sym12async' , 
+                'h': None , 
+                't0': t0 , 
+                't1': t1 , 
+                'rtol': 1e-3 , 
+                'atol': 1e-3 , 
+                'print_neval': False , 
+                'neval_max': 1e5 , 
+                't_eval':None , 
+                'interpolation_method':'cubic' , 
+                'regenerate_graph':False , 
+        }
+        
+        _, u_neighbor_int = odesolve_adjoint_sym12(
+                    self,
                     init_condition,
-                    torch.tensor([t0,t1]).float().to(device),
-                    atol=1e-8,
-                    rtol=1e-8,
-                    method='midpoint',
-                    options = {'step_size': step_size}
-                )
+                    options = options
+                    # options = {'step_size': step_size}
+                
+        )
 
         # boundary u of  the next timepoint
 

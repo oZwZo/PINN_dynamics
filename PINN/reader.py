@@ -269,7 +269,7 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         return s, t_b, u_b, hist_var, area_var, mean, var, indexs
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
-    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
+    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, replicate_key='batch', **kwargs):
         """
         Two branch system using mesh grid to span the all cell state space
 
@@ -283,6 +283,7 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         self.n_repeat = n_repeat
         self.nearby_cellstate = nearby_cellstate
         self.h = 1/self.n_grid
+        self.replicate_key = replicate_key
 
         self.n_timepoint = n_timepoint
         self.popD['t'] = self.popD['t'][:n_timepoint]
@@ -308,7 +309,7 @@ class MeshGrid_AnnDS(AnnDataset, MeshGrid):
         ###
         # set up boundary conditions
         ### 
-        ub_ls, tb_ls, var_ls = self.compute_grid_density()
+        ub_ls, hist_var_ls,area_var_ls, tb_ls, var_ls  = self.compute_grid_density()
         
 
         self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid**2)

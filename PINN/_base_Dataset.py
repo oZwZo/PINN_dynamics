@@ -161,7 +161,7 @@ class MeshGrid(Dataset):
             u_t = np.vstack(u_t)
             area_t = u_t.cumsum(axis=1)
                     
-            ub_ls.append(u_t.mean(axis=0))
+            ub_ls.append(u_t.mean(axis=0) * self.popD['mean'][tb_idx])
             hist_var_ls.append(u_t.var(axis=0)/n_exp)
             area_var_ls.append(area_t.var(axis=0)/n_exp)
             tb_ls.append(np.full_like(u, self.T_b[tb_idx])) # add norm t
