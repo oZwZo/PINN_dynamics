@@ -10,6 +10,7 @@ from .MLP_models import MLP_surrogate
 from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
 from torchdiffeq import odeint
+from kan import KAN
 
 class pde_params_base(pl.LightningModule):
     def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
@@ -41,7 +42,7 @@ class pde_params_base(pl.LightningModule):
 
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
 
-
+        self.SSE_fn = nn.MSELoss(reduce='sum')
 
     def loss_fn(self,x, x_hat, weight=None):
         """
@@ -166,7 +167,7 @@ class pde_params_base(pl.LightningModule):
         """
         penalize D to restrict instability
         """
-        D = self.D(s,t)
+        D = self.D(s.reshape(-1,1),t).squeeze()
         D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
         return D_L2 
 
@@ -371,9 +372,13 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         self.h = 1 / n_grid
         
         n_knot = channels
-        self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
-        self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        self.g = KAN(width=[1,1], grid=n_knot, k=3, seed=42, symbolic_enabled=False, grid_range=[0,1])
+        self.v = KAN(width=[1,1], grid=n_knot, k=3, seed=42, symbolic_enabled=False, grid_range=[0,1])
+        self.D = KAN(width=[1,1], grid=n_knot, k=3, seed=42, symbolic_enabled=False, grid_range=[0,1])
+
+        # self.g = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        # self.v = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
+        # self.D = CubicSpline(y = torch.rand(n_knot)*0.2, n_knot=n_knot)
     
     def ode_func(self, t, states): 
         
@@ -387,10 +392,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         h_inv =  1/self.h
 
         # infer the dynamics params with neural networks
-        g_hat = self.g(s, None)
-        D_hat = self.D(s, None)
-        v_hat = self.v(s, None)
-
+        g_hat = self.g(s.reshape(-1,1), None).squeeze()
+        D_hat = self.D(s.reshape(-1,1), None).squeeze()
+        v_hat = self.v(s.reshape(-1,1), None).squeeze()
 
         # assume u_near is a square
         assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
@@ -471,9 +475,11 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         utp1_loss = self.loss_fn(u_int[-1], utp1)
         u_int = nn.functional.relu(u_int)
 
-        # with torch.no_grad():
-        #     weight = (torch.clamp(log_utp1, min=-24) + 24)**self.weight_intensity
-        #     weight /= weight.sum()
+
+        log_utp1 = torch.log(utp1+1e-10)
+        with torch.no_grad():
+            weight = (torch.clamp(log_utp1, min=-24) + 24)**self.weight_intensity
+            weight /= weight.sum()
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=None)
 
 
