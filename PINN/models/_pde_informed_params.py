@@ -11,6 +11,7 @@ from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
 from torchdiffeq import odeint
 from kan import KAN
+import matplotlib.pyplot as plt
 
 class pde_params_base(pl.LightningModule):
     def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
@@ -42,7 +43,7 @@ class pde_params_base(pl.LightningModule):
 
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
 
-        self.PopL_fn = nn.GaussianNLLLoss()                     # for population loss
+        self.GNLL_fn = nn.GaussianNLLLoss()                     # for population loss
         self.KLD_fn = torch.nn.KLDivLoss(reduction="none")
 
 
@@ -175,7 +176,7 @@ class pde_params_base(pl.LightningModule):
         D_L2 = torch.norm(D, p=2).sum()  # in case D is high dimensional
         return D_L2 
 
-    def area_loss(self, u, u_hat):
+    def area_loss(self, u, u_hat, var=None):
         """
         use the area under curve to compute loss 
 
@@ -190,9 +191,16 @@ class pde_params_base(pl.LightningModule):
         area_x = torch.cumsum(p_x,dim=0)
         area_hat = torch.cumsum(p_hat, dim=0)
 
-        return torch.pow(area_x - area_hat,2).sum()
+        if var is None:
+            loss = torch.pow(area_x - area_hat,2).sum()
+        else:
+            # loss = self.GNLL_fn(input=p_hat, target=p_x, var=var.mean())
+            loss = torch.pow(area_x - area_hat,2).mean() / var.mean()
+            
+        return loss
 
-    def density_loss(self, u, u_hat):
+
+    def density_loss(self, u, u_hat, var=None):
         """
         use the density itself to compute
 
@@ -205,7 +213,19 @@ class pde_params_base(pl.LightningModule):
         p_x = u / u.sum()
         p_hat = u_hat / u_hat.sum()
 
-        return torch.pow(p_x - p_hat,2).sum()
+        if var is None:
+            loss = torch.pow(p_x - p_hat,2).sum()
+        else:
+            GNLL_fn = nn.GaussianNLLLoss(eps=1e-9)
+            L = GNLL_fn(input=p_hat, target=p_x, var=var)
+            
+            loss = self.GNLL_fn(input=p_hat, target=p_x, var=var)
+
+            if loss < 0:
+                eps = 1e-6
+                loss = 0.5 * torch.pow(p_x - p_hat,2).mean() / max(var.mean(),eps)
+            
+        return loss
 
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
         """
@@ -235,7 +255,7 @@ class pde_params_base(pl.LightningModule):
         assert N_theta.shape == Mean.shape, 'input and target view not identical'
         
         # compute loss and sum for all observed time point
-        L_pop = self.PopL_fn(input=N_theta, target=Mean, var=Var)**0.5
+        L_pop = self.GNLL_fn(input=N_theta, target=Mean, var=Var)**0.5
 
         return L_pop
 
@@ -459,21 +479,50 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # self.g = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[1,1.5], symbolic_enabled=False)
         # self.v = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-4,-3], symbolic_enabled=False)
         # self.D = KAN(width=[1,1], grid=11, k=3, seed=42, grid_range=[-9,-6], symbolic_enabled=False)
-        self.g = CubicSpline(y = torch.full((n_knot,), fill_value=0.95) + torch.rand(n_knot)*0.5, n_knot=n_knot)
-        self.v = CubicSpline(y = torch.full((n_knot,), fill_value=-3.0) + torch.rand(n_knot)*0.5, n_knot=n_knot)
-        self.D = CubicSpline(y = torch.full((n_knot,), fill_value=-9.0) + torch.rand(n_knot)*0.1, n_knot=n_knot)
+        self.g = CubicSpline(y = torch.full((n_knot,), fill_value=1.05) , n_knot=n_knot)
+        self.v = CubicSpline(y = torch.full((n_knot,), fill_value=-3.0) , n_knot=n_knot)
+        self.D = CubicSpline(y = torch.full((n_knot,), fill_value=-9.0) , n_knot=n_knot)
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            [module.parameters() for module in  [self.g, self.v, self.D]],
+        # optimizer = torch.optim.Adam(
+        optimizer = torch.optim.RMSprop(
+            [next(module.parameters()) for module in  [self.g, self.v, self.D]],
             # self.parameters(),
                 lr=self.lr)
         return optimizer
 
+    def plot_u_dt(self, t, s, u_t, g_hat, v_hat, D_hat):
+        """
+        plot three curves 
+        """
+        # : 300
+        with torch.no_grad():
+            u_t = u_t.clone().cpu().numpy()
+            s = s.clone().cpu().numpy()
+            g_hat = g_hat.clone().cpu().numpy()
+            v_hat = v_hat.clone().cpu().numpy()
+            D_hat = D_hat.clone().cpu().numpy()
+
+        fig, axs = plt.subplots(1,4, figsize=(16,3))
+
+        axs[0].plot(s, u_t)
+        axs[0].set_title("u at {:.3f} at epoch {}".format(t, self.current_epoch))
+
+        axs[1].plot(s, g_hat)
+        axs[1].set_title(f"g^")
+
+        axs[2].plot(s, v_hat)
+        axs[2].set_title(f"v^")
+
+        axs[3].plot(s, D_hat)
+        axs[3].set_title(f"D^")
+
+        fig.savefig("/home/wergillius/Project/PINN_dynamics/results/singlebranch_dudt_plots/t={:.3f}-e={}.png".format(t, self.current_epoch))
+
 
     def ode_func(self, t, states): 
         
-
+        
         u_t = states[0]     # : 300
         u_t = nn.functional.relu(u_t)
         s = states[1]       # : 300
@@ -492,6 +541,9 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         v_hat = torch.exp(v_hat) # v can only be positive
         D_hat = torch.exp(D_hat)
 
+        if np.random.random() < 1e-3:
+            self.plot_u_dt(t, s, u_t, g_hat, v_hat, D_hat)
+
         # assume u_near is a square
         assert g_hat.shape == u_t.shape , "u and g does not have the same shape"
 
@@ -500,7 +552,8 @@ class pde_singlebranch_twotimepoints(pde_params_base):
 
         # discretized drift with boundary
         drift = torch.zeros_like(u_t)
-        drift[0] = v_hat[0] * 0.5 * (u_t[0] + u_t[1]) * self.h_inv
+        drift[0] = v_hat[0] * 0.5 * (u_t[1] - u_t[0]) * self.h_inv
+        # drift[0] = 0.5 * (v_hat[1] * (u_t[1] + u_t[2]) - v_hat[0] * (u_t[0] + u_t[1]) ) * self.h_inv
         drift[-1] = -1 * v_hat[-1] * 0.5 * (u_t[-2] + u_t[-1]) * self.h_inv
         # vb1(end)*1/2*(x(n_grid-2)+x(n_grid-1))*sqrt(h2inv)
 
@@ -511,6 +564,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # discretized diffusion with boundary
         diffusion = torch.zeros_like(u_t)
         diffusion[0] = -1 * h2inv * (D_hat[0] * (u_t[0] - u_t[1])) 
+        # diffusion[0] = h2inv * (D_hat[0] * (u_t[0] - u_t[1]) - D_hat[1] * (u_t[1] - u_t[2]))
         diffusion[-1] = h2inv * (D_hat[-1] * (u_t[-2] - u_t[-1]))
         for i in range(1, self.n_grid-1):
             diffusion[i] = h2inv * (D_hat[i - 1] * (u_t[i - 1] - u_t[i]) - D_hat[i] * (u_t[i] - u_t[i + 1]))
@@ -533,7 +587,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # s : n_grid, n_dimension
         # t_b : n_grid, n_timepoints, 1
         # u_b : n_grid, n_timepoints, 1
-        s, t_b, u_b, mean, var, indexs = train_batch 
+        s, t_b, u_b, hist_var, area_var, mean, var, indexs = train_batch 
 
         it = indexs[0].item()
         itp1 = indexs[1].item()
@@ -554,13 +608,104 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         t0 = t_list[it].item()
         t1 = t_list[itp1].item()
 
-        step_size = np.around((t1 - t0)/10, decimals=2).item() 
+        step_size = np.around((t1 - t0)/5, decimals=2).item() 
         step_size = step_size if step_size > 0 else 0.05
 
         step_size = min(step_size, 0.4)
 
         ut0 = u_b[it,:]
         utp1 = u_b[itp1,:]
+        u_var_t0 = hist_var[it,:]
+        u_var_tp1 = hist_var[itp1,:]
+        a_var_t0 = area_var[it,:]
+        a_var_tp1 = area_var[itp1,:]
+
+        # init condition : ut, s in a square, u in a square
+        N =  ut0.sum()
+        init_condition = (ut0, s)
+        u_int, s_int = odeint(
+                    self.ode_func,
+                    init_condition,
+                    torch.Tensor([t0,t1]).type(torch.float32).to(device),
+                    atol=1e-6,
+                    rtol=1e-6,
+                    method='dopri5',
+                    # options = {'step_size': step_size}
+                )
+
+        # boundary u of  the next timepoint
+        utp1_loss = self.loss_fn(u_int[-1], utp1)
+        u_int = nn.functional.relu(u_int)
+
+        with torch.no_grad():
+            weight = (torch.clamp(torch.log(utp1+1e-10), min=-24) + 24)**self.weight_intensity
+            weight /= weight.sum()
+        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
+        
+        
+        area_loss = self.area_loss(utp1, u_int[-1], var=a_var_tp1)
+        density_loss = self.density_loss(utp1, u_int[-1], var=u_var_tp1)
+        distribution_loss = self.distribution_loss(utp1, u_int[-1])
+
+        boundary_loss = self.density_loss(utp1[0], u_int[-1][0], var=u_var_tp1[0]) + \
+                        self.density_loss(utp1[-1], u_int[-1][-1], var=u_var_tp1[-1])
+
+
+
+        if var[itp1] < 1:
+            var_base = torch.Tensor([1.0]).to(mean.device)
+        else:
+            var_base = var[itp1]
+        pop_loss = self.population_loss(u_int[-1], mean[itp1], var_base)
+        pop_loss = torch.clamp(pop_loss, max=1000)
+
+
+        s_input = s.reshape(-1,1)
+        D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
+
+        # total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
+
+        total_loss = boundary_loss + density_loss +  pop_loss + self.D_penalty * D_norm
+        # distribution_loss +
+
+
+        with torch.no_grad():
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("area_loss", area_loss.item(),  on_epoch=True)
+            self.log("density_loss", density_loss.item(),  on_epoch=True)
+            self.log("distribution_loss", distribution_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
+
+
+    def validation_step(self, val_batch, index):
+        
+        # s : n_grid, n_dimension
+        # t_b : n_grid, n_timepoints, 1
+        # u_b : n_grid, n_timepoints, 1
+        s, t_b, u_b, mean, var, indexs = val_batch 
+
+        # divided by 5 to reduce the integration time
+        device = s.device
+
+        it = indexs[0].item()
+        itp1 = indexs[1].item()
+
+        # init_condition 
+        ut0 = u_b[it,:]
+        utp1 = u_b[itp1,:]
+
+        
+        # init_condition 
+        t_list = t_b.detach().clone().flatten()
+        t0 = t_list[it].item()
+        t1 = t_list[itp1].item()
+
+        step_size = np.around((t1 - t0)/10, decimals=2).item() 
+        step_size = step_size if step_size > 0 else 0.05
+
+        step_size = min(step_size, 0.4)
 
         # init condition : ut, s in a square, u in a square
         N =  ut0.sum()
@@ -576,108 +721,34 @@ class pde_singlebranch_twotimepoints(pde_params_base):
                 )
 
         # boundary u of  the next timepoint
-        utp1_loss = self.loss_fn(u_int[-1], utp1)
         u_int = nn.functional.relu(u_int)
 
         with torch.no_grad():
+
+            density_loss = self.density_loss(utp1, u_int[-1])
+            area_loss = self.area_loss(utp1, u_int[-1])
+            distribution_loss = self.distribution_loss(utp1, u_int[-1])
+
+            if var[itp1] < 1:
+                var_base = torch.Tensor([1.0]).to(mean.device)
+            else:
+                var_base = var[itp1]
+            pop_loss_t = self.population_loss(u_int[-1], mean[itp1], var_base)
+            # print(i, self.population_loss(u_int[i], mean[i], var[i]))
+            pop_loss = torch.clamp(pop_loss_t, max=1000)
+
+            
             weight = (torch.clamp(torch.log(utp1+1e-10), min=-24) + 24)**self.weight_intensity
             weight /= weight.sum()
-        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)
-        
-        
-        area_loss = self.area_loss(utp1, u_int[-1])
-        distribution_loss = self.distribution_loss(utp1, u_int[-1])
-
-        if var[itp1] < 1:
-            var_base = torch.Tensor([1.0]).to(mean.device)
-        else:
-            var_base = var[itp1]
-        pop_loss = self.population_loss(u_int[-1], mean[itp1], var_base)
-        pop_loss = torch.clamp(pop_loss, max=1000)
-
-
-        s_input = s.reshape(-1,1)
-        D_norm = self.restrict_D(s, torch.full(utp1.shape, t1).to(device))
-
-        # total_loss = log_utp1_loss/self.n_grid + self.D_penalty * D_norm
-
-        total_loss = area_loss +  pop_loss + self.D_penalty * D_norm
-        # distribution_loss +
-
-
-        with torch.no_grad():
-            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
-            self.log("area_loss", area_loss.item(),  on_epoch=True)
-            self.log("distribution_loss", distribution_loss.item(), on_epoch=True)
-            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
-
-        return total_loss
-
-
-    def validation_step(self, val_batch, index):
-        
-        # s : n_grid, n_dimension
-        # t_b : n_grid, n_timepoints, 1
-        # u_b : n_grid, n_timepoints, 1
-        s, t_b, u_b, mean, var, indexs = val_batch 
-
-        # divided by 5 to reduce the integration time
-    
-        t_list = t_b.detach().clone().flatten()  /5
-
-        device = s.device
-
-        
-        # loss 2 : dynamics 
-        # init_condition 
-
-        step_size = np.around((t_list.max().item() - t_list.min().item())/20, decimals=2).item() 
-        step_size = step_size if step_size > 0 else 0.05
-
-        step_size = min(step_size, 0.4)
-
-        ut0 = u_b[0,:]
-
-        # init condition : ut, s in a square, u in a square
-        N =  ut0.sum()
-        init_condition = (ut0, s)
-        u_int, s_int = odeint(
-                    self.ode_func,
-                    init_condition,
-                    t_list.type(torch.float32).to(device),
-                    atol=1e-8,
-                    rtol=1e-8,
-                    method='midpoint',
-                    options = {'step_size': step_size}
-                )
-
-        # boundary u of  the next timepoint
-        u_int = nn.functional.relu(u_int)
-
-        with torch.no_grad():
-            area_loss = 0 
-            pop_loss = 0
-            distribution_loss = 0
-            for i in range(1,len(t_list)):
-                u_b_t = u_b[i,:]
-                N_t = u_b_t.sum()
-                
-                area_loss += self.area_loss(u_b_t, u_int[i])
-                distribution_loss += self.distribution_loss(u_b_t, u_int[i])
-                if var[i] < 1:
-                    var_base = torch.Tensor([1.0]).to(mean.device)
-                else:
-                    var_base = var[i]
-                pop_loss_t = self.population_loss(u_int[i], mean[i], var_base)
-                # print(i, self.population_loss(u_int[i], mean[i], var[i]))
-                pop_loss_t = torch.clamp(pop_loss_t, max=1000)
-                pop_loss += pop_loss_t 
-                
+            log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10), weight=weight)    
 
             total_loss = area_loss + pop_loss #+ self.D_penalty * D_norm
+            self.plot_u_dt(self, t0, s, ut0, utp1, u_int[-1], self.g.y.clone().detach().cpu().numpy())
 
 
             self.log("area_loss", area_loss.item(),  on_epoch=True)
+            self.log("density_loss", density_loss.item(),  on_epoch=True)
+            self.log("log_density_loss", log_utp1_loss.item(),  on_epoch=True)
             self.log("pop_loss", pop_loss.item(), on_epoch=True)
             self.log("kld_loss", distribution_loss.item(), on_epoch=True)
             self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)

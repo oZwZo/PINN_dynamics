@@ -198,7 +198,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
                                 ## Trajectory Dependent  DS   ##
                                 ################################
 class SingleBranch_AnnDS(AnnDataset, MeshGrid):
-    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):
+    def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, max_timespan = 3, replicate_key = 'batch', **kwargs):
         """
         Single branch system using pseudotime grid to span the all cell state space
 
@@ -212,6 +212,7 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         self.n_repeat = n_repeat
         self.nearby_cellstate = nearby_cellstate
         self.h_inv = 1/self.n_grid
+        self.replicate_key = replicate_key
 
         self.popD['t'] = self.popD['t'][:n_timepoint]
         self.n_timepoint = len(self.popD['t'])
@@ -222,10 +223,12 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
 
         # density
         self.cellstate = self.cellstate.flatten()
-        ub_ls, tb_ls, var_ls = self.compute_grid_density() # this is from MeshGrid
+        ub_ls, hist_var_ls,area_var_ls, tb_ls, var_ls = self.compute_grid_density() # this is from MeshGrid
 
         self.u_b = np.vstack(ub_ls) + 1e-30  # (tb, n_grid)
         # self.mesh_ub = self.u_b.reshape(-1, self.n_grid,self.n_grid) # (tb, n_grid, n_grid)
+        self.hist_var = np.vstack(hist_var_ls)
+        self.area_var = np.vstack(area_var_ls)
         self.t_b = np.vstack(tb_ls)
         
         # observeds
@@ -234,7 +237,15 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
 
         # timepoint pair:
         self.timpoint_pairs_index = []
-        for span in range(1,self.n_timepoint):  # [1, N_t -1]
+        
+        if max_timespan is None:
+            max_timespan = self.n_timepoint
+        else:
+            if max_timespan<=0:
+                raise ValueError("max time span must larger than 0")
+            max_timespan = max_timespan + 1
+
+        for span in range(1,max_timespan):  # [1, N_t -1]
             for start in range(self.n_timepoint-span):
                 self.timpoint_pairs_index.append( [start, start+span] )
 
@@ -250,10 +261,12 @@ class SingleBranch_AnnDS(AnnDataset, MeshGrid):
         s = torch.from_numpy(self.s).clone().float()
         t_b = torch.from_numpy(self.T_b).float()
         u_b = torch.from_numpy(self.u_b).float()
+        hist_var = torch.from_numpy(self.hist_var).float()
+        area_var = torch.from_numpy(self.area_var).float()
 
         mean = torch.from_numpy(self.pop_mean).float()
         var = torch.from_numpy(self.pop_var).float()
-        return s, t_b, u_b, mean, var, indexs
+        return s, t_b, u_b, hist_var, area_var, mean, var, indexs
 
 class MeshGrid_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, norm_time=True, **kwargs):

@@ -29,6 +29,7 @@ parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR",
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--n_dimension", type=int, required=False, default=2, help='the number of dimension to used for estimating density')
 parser.add_argument("--n_timepoint", type=int, required=False, default=None, help='the number of timepoints to used for fit the dynamics')
+parser.add_argument("--max_timespan", type=int, required=False, default=1, help='the time span of ode int, decides the long-term /  short-term coupling')
 parser.add_argument("--nearby_cellstate", type=int, required=False, default=3, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the intensity to weight high density region in the loss, > 1 means lean more on high density region')
@@ -70,7 +71,9 @@ train_DS = reader.SingleBranch_AnnDS(AnnData=adata,
                                 cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                 n_grid=args.n_grid,  
                                 log_transform=False,
-                                norm_time = False)
+                                max_timespan = args.max_timespan,
+                                replicate_key='batch',
+                                norm_time = 'min_minus')
 
 def reduce_batchdim(batch):
     # for batch size 1 , remove the batch dimension
@@ -131,6 +134,7 @@ Pdyn_model = Model_Class(
         lr=args.lr,
         n_grid=args.n_grid,
         channels = channels,
+        D_penalty = 10,
         weight_intensity=args.weight_intensity,
     )
 
@@ -157,7 +161,7 @@ trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
                     # fast_dev_run=True,
-                    gradient_clip_val=30,
+                    gradient_clip_val=0.3,
                     default_root_dir=save_path,
                     logger=tb_logger,
                     devices = [gpu_device],
@@ -168,4 +172,4 @@ trainer = pl.Trainer(
 
 # start training
 Pdyn_model.train()
-trainer.fit(Pdyn_model, train_dataloaders=train_DL, val_dataloaders=train_DL, ckpt_path = args.pretrained)
+trainer.fit(Pdyn_model, train_dataloaders=train_DL, ckpt_path = args.pretrained)
