@@ -23,10 +23,10 @@ torch.set_float32_matmul_precision('medium')
 
     
 
-parser = argparse.ArgumentParser("Training PINN dynamics on single timepoint dataset")
+parser = argparse.ArgumentParser("Training PINN dynamics on mesh-free high dimensional cellstate, default model pde_params with ODEint for solving the equation")
 parser.add_argument("-D", "--dataset", type=str, required=False, default="HSPC_clu7", help='the name of the dataset, can be found under folder data')
 parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="cellstate", help='the obsm key on which we represent cell and compute density')
-parser.add_argument("-M", "--model", type=str, required=False, default="Cspline_PINN", help='the model class, defined in models.py')
+parser.add_argument("-M", "--model", type=str, required=False, default="pde_params", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
