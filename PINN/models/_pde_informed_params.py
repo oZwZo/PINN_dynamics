@@ -16,7 +16,7 @@ from kan import KAN
 import matplotlib.pyplot as plt
 
 class pde_params_base(pl.LightningModule):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
         """
         mlp u theta
 
@@ -41,6 +41,7 @@ class pde_params_base(pl.LightningModule):
         
         self.time_sensitive = time_sensitive
         self.lr = lr
+        self.ode_tol = ode_tol 
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
@@ -127,7 +128,7 @@ class pde_params_base(pl.LightningModule):
         
         we calcuate the left hand side (lhs) and the right hand side
         """
-        u = self.forward(s,t) # make sure it is u
+        u = self.get_u(s,t) # make sure it is u
         D = self.D(s,t)
         v = self.v(s,t)
         g = self.g(s,t)
@@ -277,7 +278,7 @@ class pde_params_base(pl.LightningModule):
         return L_kld.mean()
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
         """
         mlp u theta
 
@@ -297,7 +298,7 @@ class pde_params(pde_params_base):
 
 
         """
-        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, activation_fn=activation_fn, D_penalty = D_penalty)
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty)
         self.save_hyperparameters()
         
         self.time_sensitive = time_sensitive
@@ -326,10 +327,13 @@ class pde_params(pde_params_base):
             D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
         self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn)
 
-    def forward(self, s, t):
+    def get_u(self, s, t):
         logu = self.u(s, t) 
         u_pred = torch.exp(logu)
         return u_pred
+
+    def forward(self, t, states):
+        return self.ode_func(t, states)
     
     def ode_func(self, t, states):
         """
@@ -344,7 +348,7 @@ class pde_params(pde_params_base):
             s.requires_grad_(True)
             t_in.requires_grad_(True)
 
-            u = self.forward(s, t_in) # make sure it is u but not log u
+            u = torch.exp(self.u(s, t_in)) # make sure it is u but not log u
 
             _, growth, drift, diffuse = self.equation(s, t_in)
 
@@ -387,13 +391,13 @@ class pde_params(pde_params_base):
         step_size = min(step_size, 0.4)
 
         u_int, s_t = odeint(
-                        self.ode_func,
-                        init_condition,
-                        torch.tensor([t0, t1]).type(torch.float32).to(device),
-                        atol=1e-5,
-                        rtol=1e-5,
-                        method='midpoint',
-                        options = {'step_size': step_size}
+                        self,
+                        y0 = init_condition,
+                        t = torch.tensor([t0, t1]).type(torch.float32).to(device),
+                        atol=self.ode_tol,
+                        rtol=self.ode_tol,
+                        method='dopri5',
+                        adjoint_options={'norm':'seminorm'},
                     )
 
         # boundary u of  the next timepoint
@@ -434,13 +438,13 @@ class pde_params(pde_params_base):
 
         init_condition = (ut, s)
         u_int, s_t = odeint(
-                        self.ode_func,
-                        init_condition,
-                        torch.tensor([t, tp1]).type(torch.float32).to(device),
+                        self,
+                        y0 = init_condition,
+                        t = torch.tensor([t, tp1]).type(torch.float32).to(device),
                         atol=1e-5,
                         rtol=1e-5,
-                        method='midpoint',
-                        options = {'step_size': 0.1}
+                        method='dopri5',
+                        adjoint_options={'norm':'seminorm'},
                     )
 
         # boundary u of  the next timepoint
@@ -455,7 +459,7 @@ class pde_params(pde_params_base):
 
 
 class pde_singlebranch_twotimepoints(pde_params_base):
-    def __init__(self, n_grid=300, channels=11, lr=3e-4,  D_penalty = None, weight_intensity=None):
+    def __init__(self, n_grid=300, channels=11, lr=3e-4,  D_penalty = None, weight_intensity=None, ode_tol=1e-4):
         """
         Use cubic spline to fit g,v,D for single branch dataset
 
@@ -469,7 +473,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         optim_class : str, the optimizer used
         D_penalty : float , default None the weight for penalizing D
         """
-        super().__init__(channels=channels, lr=lr,D_penalty = D_penalty,collapse_D = True, collapse_v = True, g_channels=channels, v_channels=channels, D_channels=channels, time_sensitive=True,  activation_fn='Tanh')
+        super().__init__(channels=channels, lr=lr, ode_tol=ode_tol, D_penalty = D_penalty,collapse_D = True, collapse_v = True, g_channels=channels, v_channels=channels, D_channels=channels, time_sensitive=True,  activation_fn='Tanh')
         
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
         self.n_grid = n_grid
@@ -842,8 +846,8 @@ class pde_params_meshgrid(pde_params_base):
 
 
     """
-    def __init__(self, channels, n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
-        super().__init__(channels, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
+    def __init__(self, channels, n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4,  ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+        super().__init__(channels=channels, collapse_D=collapse_D, collapse_v=collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=time_sensitive, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty=D_penalty)
 
         self.n_grid = n_grid
         self.h = 1 / n_grid
@@ -1039,8 +1043,8 @@ class pde_params_meshgrid(pde_params_base):
 
 
 class pde_neighborloss(pde_params_meshgrid):
-    def __init__(self, channels,  n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
-        super().__init__(channels, n_grid, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, activation_fn, D_penalty)
+    def __init__(self, channels,  n_grid, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
+        super().__init__(channels, n_grid, collapse_D, collapse_v, g_channels, v_channels, D_channels, time_sensitive, lr, ode_tol, activation_fn, D_penalty)
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
 
     def ode_func(self,t, states):
