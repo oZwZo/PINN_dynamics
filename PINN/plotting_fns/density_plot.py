@@ -14,7 +14,7 @@ import matplotlib.animation as animation
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 
-def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True,):
+def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, umap_kws={"alpha":0.7, "color_map":'viridis'}):
     r"""
     A very basic functions plotting cellular attribute in the umap and stratified by time
 
@@ -41,12 +41,13 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True,):
     """
 
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), dpi=100, gridspec_kw={'wspace':0.4})
+    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), gridspec_kw={'wspace':0.4})
     # axs = axs.flatten()
     axis_j = 0
 
+    timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
     for t in timepoints:
-        cbs = anndata.obs.query('`timepoint_tx_days` == @t').index
+        cbs = anndata.obs.query(f'`{timepoint_key}` == @t').index
 
         col = attribute(t) if isinstance(attribute, Callable) else attribute
         title = col if isinstance(attribute, Callable) else attribute+' d%d'%t
@@ -54,9 +55,9 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True,):
         sc.pl.umap(anndata, show=False, return_fig=False,  ax=axs[axis_j], alpha=0.5, s=50,frameon=False);
 
         ad_t = anndata[cbs] if cell_of_t else anndata
-        sc.pl.umap(ad_t, color=col, alpha=0.7, color_map='viridis', 
-                return_fig=False,show=False, ax=axs[axis_j], s=50, frameon=False, 
-                title=title);
+        sc.pl.umap(ad_t, color=col,  
+                return_fig=False,show=False, ax=axs[axis_j], frameon=False, 
+                title=title, **umap_kws);
         
         axis_j += 1
 
@@ -168,3 +169,57 @@ def resampling_animation_umap(train_DS, save_path):
 
     ani = animation.FuncAnimation(fig, run, frames=200, interval=10, init_func=init)  # make animation
     ani.save(save_path, fps=5, writer='pillow') 
+
+
+def stack_catplot(x, y, cat, stack, data, palette=sns.color_palette('Reds')):
+    ax = plt.gca()
+    # pivot the data based on categories and stacks
+    # df = data.pivot_table(values=y, index=[cat, x], columns=stack, 
+    #                       dropna=False, aggfunc='sum').fillna(0)
+    ncat = data[cat].nunique()
+    nx = data[x].nunique()
+    nstack = data[stack].nunique()
+    range_x = np.arange(nx)
+    width = 0.8 / ncat # width of each bar
+    
+    for i, c in enumerate(data[cat].unique()):
+        # iterate over categories, i.e., Conditions
+        # calculate the location of each bar
+        loc_x = (0.5 + i - ncat / 2) * width + range_x
+        bottom = 0
+
+        for j, s in enumerate(data[stack].unique()):
+            # iterate over stacks, i.e., Hosts
+            # obtain the height of each stack of a bar
+            height_df = data.query(f"`{cat}` == @c & `{stack}`==@s")
+            height_df = height_df.set_index(x)
+            height = height_df.loc[data[x].unique(), y]
+            # plot the bar, you can customize the color yourself
+            
+            hatch = '/' if i == 1 else None
+            barcontainer = ax.bar(x=loc_x, height=height, 
+                                  bottom=bottom, width=width*0.7, 
+                                    color=palette[s], 
+                                    # zorder=10, 
+                                    lw=0.1,
+                                    hatch=hatch, label=f"{c}: {s}")
+            
+  
+            for bc in barcontainer:
+                bc._hatch_color = mpl.colors.to_rgba("w")
+                bc.stale = True
+            
+            # change the bottom attribute to achieve a stacked barplot
+            bottom += height
+
+    # make xlabel
+    ax.set_xticks(range_x)
+    ax.set_xticklabels(data[x].unique(), rotation=45)
+    ax.set_ylabel(y)
+    # make legend
+    plt.legend(
+            #     [Patch(facecolor=palette[i]) for i in range(ncat * nstack)], 
+            #    [f"{c}: {s}" for c in data[cat].unique() for s in data[stack].unique()],
+               bbox_to_anchor=(1.05, 0.8), loc='upper left', borderaxespad=0., ncol=2)
+    plt.grid()
+    return ax
