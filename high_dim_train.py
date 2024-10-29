@@ -30,6 +30,7 @@ parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR",
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
 parser.add_argument("--n_timepoint", type=int, required=False, default=5, help='the number of timepoints to used for fit the dynamics')
 parser.add_argument("--batch_size", type=int, required=False, default=50, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
@@ -133,6 +134,7 @@ model = Model_Class(u=u_theta, channels= [n_dim, 32],  lr=args.lr,
                     g_channels = [n_dim, 128,32,1],
                     D_channels = [n_dim, 32,32,1],
                     schedule_lr=schedule_lr,
+                    ode_tol = args.tol,
                     time_sensitive = args.time_sensitive
                     )
 
