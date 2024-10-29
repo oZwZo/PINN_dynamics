@@ -19,7 +19,7 @@ class AnnDataset(Dataset):
         cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
         timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
         pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
-        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+        log_transform : bool, default False, whether the population size will be log transformed to reduce the magnitude of the data
 
         Returns:
         ----------
