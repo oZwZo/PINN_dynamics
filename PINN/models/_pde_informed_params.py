@@ -277,8 +277,45 @@ class pde_params_base(pl.LightningModule):
         
         return L_kld.mean()
 
+    def predict_param(self, DataSet, param='g'):    
+        """
+        Given a DataSet Class, predict the param 
+        """
+        device = next(self.u.parameters()).device
+
+        cellstate_only = (self.time_sensitive == False) and (param != 'u')
+        
+        # get cell states and their paired timepoints
+        if cellstate_only:
+            # cellstate is [n_cell, n_dim]
+            s_all = torch.from_numpy(DataSet.cellstate).float().requires_grad_()
+        else:
+            # s is [n_time * n_cell , n_dim]
+            s_all = DataSet.s.float().requires_grad_()
+            
+
+        t_b = DataSet.t_b.float().requires_grad_()
+
+        # get the behavior function
+        sub_module = self.__getattr__(param)
+        param_pred = sub_module(s_all.to(device), t_b.to(device))
+
+        if (len(param_pred.shape) != 1) and (param_pred.shape[1] == DataSet.n_dimension):
+            param_pred = self.trace_div(param_pred, s_all)
+
+            
+        if cellstate_only:
+            param_pred = param_pred.detach().cpu().numpy()
+        else:
+            n_timepoint = len(DataSet.popD['t'])
+            param_pred = param_pred.detach().cpu().numpy().reshape(n_timepoint, -1)
+
+
+        return param_pred
+
+
 class pde_params(pde_params_base):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
         """
         mlp u theta
 
@@ -298,7 +335,7 @@ class pde_params(pde_params_base):
 
 
         """
-        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty)
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity)
         self.save_hyperparameters()
         
         self.time_sensitive = time_sensitive

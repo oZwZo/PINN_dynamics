@@ -7,6 +7,7 @@ import random
 import scanpy as sc
 from typing import Callable
 
+import matplotlib as mpl
 from matplotlib import pyplot as plt
 from matplotlib import rcParams
 import seaborn as sns

@@ -157,3 +157,8 @@ trainer = pl.Trainer(
                     )
 
 trainer.fit(model, train_dataloaders=train_DL)
+
+def train(model, train_dataset, args):
+
+    adata = train_dataset.adata
+    dx = adata.layers['dx']

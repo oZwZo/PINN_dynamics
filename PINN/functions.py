@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from tqdm import tqdm
 from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
 from . import models
@@ -33,6 +34,7 @@ def pred_to_nday(x, n_timepoint=5, n_dim=5):
     if nday.shape[-1] != t5_ad.shape[0]:
         nday = nday.reshape(n_timepoint, -1, n_dim)
     return nday
+
 
 
 def compute_guassian_u(Cellstate_ay, dimension=10):
@@ -291,3 +293,128 @@ def Lambda2(epoch, gamma=0.15, changepoint=150):
     factor_grow = changepoint_f * np.exp((epoch/changepoint)**2)**gamma
 
     return factor_decay if epoch <= changepoint else factor_grow 
+
+def traverse_neighbor(connectivities, k, knn_idx):
+    k = -1*k 
+    # random walk
+    next_degree_knn = []
+    for i_d in knn_idx:
+        neighbor = np.argpartition(connectivities[i_d].A, k)[k:].tolist()
+        next_degree_knn.extend(neighbor)
+    
+    # all neighbor visited to the current degree
+
+    knn_idx_d_plus1 = knn_idx + next_degree_knn
+    # knn_idx_d_plus1 = np.unique(knn_idx_d_plus1).astype(int)
+    knn_idx_d_plus1 = np.unique(next_degree_knn).astype(int).tolist()
+    return knn_idx_d_plus1
+
+def _sample_by_distance(dist_array, candidate_idx, alpha=None, repeat=1):
+    """
+    based on the knn distance, sample the closest cell 
+        P ~ (1 - distance)
+    dist_array : ndarray, distance from all other cells to cell i
+    candidate_idx : the index of knn / or cansidered neighbor cells
+    alpha: parameter to adjust uncertainty, the lower the more uncertrain
+    repeat: the number of cells to sample each time
+    """
+    alpha = 1 if alpha is None else alpha
+
+    dist = dist_array[candidate_idx]
+    where_inf = np.isinf(dist)
+    if np.any(where_inf):
+        try:
+            next_max = dist[~where_inf].max()
+            dist = np.where(where_inf, next_max, dist)
+        except ValueError:
+            dist = np.zeros_like(dist)
+
+    knn_p = dist.max() - dist + 0.1*dist.min()
+    if knn_p.sum() > 0:
+        knn_p = knn_p**alpha
+        p = knn_p / knn_p.sum() # normalized
+    else:
+        p = None 
+
+    neighbor_idx = [np.random.choice(candidate_idx, p=p) for i in range(repeat)]
+    if repeat == 1:
+        neighbor_idx = neighbor_idx[0]
+    return neighbor_idx, p
+
+def sample_deltax(adata, max_degree=1, k=None, pseudotimekey='palantir_pseudotime', progressbar=True):
+    """
+    the Key function defines the noise sampling process 
+    given the starting point i
+    """
+
+    connectivities = adata.obsp['connectivities'].copy()
+    distance = adata.obsp['distances'].copy()
+    pdt = adata.obs[pseudotimekey].values
+
+    if k is None:
+        k  = adata.uns['neighbors']['params']['n_neighbors']
+
+    X = adata.X
+
+    def prograss_(x, turn_on=progressbar):
+        if turn_on:
+            return tqdm(x)
+        else:
+            return x
+    
+    delta_X = []
+
+    
+    for i in prograss_(range(X.shape[0]), progressbar):
+
+        knn_idx = np.array([i])
+        t_i = pdt[i]
+
+        # init
+        pass_1 = 0
+        pass_2 = 0
+        n_degree = 0
+
+        final_index = []
+        
+        while pass_1*pass_2==0 and n_degree < max_degree:
+            
+            # if n_degree > self.free_search_degree:   # only under this degree can we expand knn without any constraints
+            #     knn_idx = pass_2_idx
+        
+            knn_idx = traverse_neighbor(connectivities, k, knn_idx) 
+
+            # 1 : neighbor with the same condition
+            pass_1_idx = knn_idx
+            if len(pass_1_idx) > 0:
+                pass_1 = 1
+            else:
+                final_index = knn_idx
+                continue
+
+            # 2 : neighbor with bigger pseudo-time
+            knn_t = pdt[pass_1_idx]
+            if np.any(knn_t > t_i):
+                pass_2_idx = np.array(pass_1_idx)[knn_t > t_i]
+                pass_2 = 1
+
+            else:
+                pass_2_idx = pass_1_idx
+                final_index = knn_idx
+                continue
+            n_degree += 1
+                    
+        # sampled by distance
+
+        knn_p = connectivities[i,pass_2_idx]
+        p = knn_p / knn_p.sum() if knn_p.sum() != 0 else None
+
+        if len(final_index) == 0:
+            final_index = knn_idx
+            neighbor_idx = i
+        else:
+            neighbor_idx, p = _sample_by_distance(distance, final_index)
+
+        delta_X.append( X[neighbor_idx] - X[[i]] )
+
+    return delta_X
