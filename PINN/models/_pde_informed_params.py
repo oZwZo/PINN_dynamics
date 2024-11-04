@@ -16,7 +16,7 @@ from kan import KAN
 import matplotlib.pyplot as plt
 
 class pde_params_base(pl.LightningModule):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None):
         """
         mlp u theta
 
@@ -43,6 +43,7 @@ class pde_params_base(pl.LightningModule):
         self.lr = lr
         self.ode_tol = ode_tol 
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
+        self.deltax_weight = 0 if deltax_weight is None else deltax_weight
 
         self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
 
@@ -167,10 +168,26 @@ class pde_params_base(pl.LightningModule):
         growth = torch.mul(g, u)
         
         return dudt, growth, drift, diffuse
-    
+
+    def constrain_v(self, s, t, deltax):
+        r"""
+        regularize v to make it keep in the same direction as delta x
+        
+        Arguments
+        ---------
+        s : tensor (n_cell, n_dim)
+        t : tensor (n_cell,)
+        deltax : tensor (n_cell, n_dim), sampled from pseudotime / KNN 
+        """
+        if deltax is not None:
+            v = self.v(s,t)
+            v_loss = -1*torch.mean(nn.functional.cosine_similarity(deltax, v))
+        else:
+            v_loss = 0
+        return v_loss    
 
     def restrict_D(self, s, t, exp=True):
-        """
+        r"""
         penalize D to restrict instability
         """
         D = self.D(s,t)
@@ -180,7 +197,7 @@ class pde_params_base(pl.LightningModule):
         return D_L2 
 
     def area_loss(self, u, u_hat, var=None):
-        """
+        r"""
         use the area under curve to compute loss 
 
         Arguments
@@ -204,7 +221,7 @@ class pde_params_base(pl.LightningModule):
 
 
     def density_loss(self, u, u_hat, var=None):
-        """
+        r"""
         use the density itself to compute
 
         Arguments
@@ -231,7 +248,7 @@ class pde_params_base(pl.LightningModule):
         return loss
 
     def population_loss(self, u_pred, Mean, Var) -> torch.Tensor:
-        """
+        r"""
         the loss term defined for population size, governed by Gaussian Negative Likelihood loss
             Gaussian NLL := 0.5 * log(var) + 0.5 * (input - target)**2/var  +const
         
@@ -263,7 +280,7 @@ class pde_params_base(pl.LightningModule):
         return L_pop
 
     def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:
-        """
+        r"""
         the loss defined as the kl divergence of the distribution, used to keep the shape
         """
         # from density to probability
@@ -278,7 +295,7 @@ class pde_params_base(pl.LightningModule):
         return L_kld.mean()
 
     def predict_param(self, DataSet, param='g'):    
-        """
+        r"""
         Given a DataSet Class, predict the param 
         """
         device = next(self.u.parameters()).device
@@ -315,8 +332,8 @@ class pde_params_base(pl.LightningModule):
 
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', D_penalty = None, weight_intensity=None):
-        """
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None):
+        r"""
         mlp u theta
 
         Arguments:
@@ -335,7 +352,7 @@ class pde_params(pde_params_base):
 
 
         """
-        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity)
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
         self.save_hyperparameters()
         
         self.time_sensitive = time_sensitive
@@ -400,7 +417,7 @@ class pde_params(pde_params_base):
     def training_step(self, train_batch, index):
         
         # cellstate, t, t+1, u_t, u_{t+1}
-        s, (t, tp1), (ut, utp1) = train_batch
+        s, (t, tp1), (ut, utp1), deltax = train_batch
 
         # divided by 5 to reduce the integration time
         t0 = t[0].item() / 5
@@ -444,8 +461,9 @@ class pde_params(pde_params_base):
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
 
         D_norm = self.restrict_D(s, t, exp=True)
+        v_loss = self.constrain_v(s,t,deltax)
 
-        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm
+        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss
 
 
         with torch.no_grad():

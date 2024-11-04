@@ -14,7 +14,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, kde_kws={},**kwargs):
+    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -38,6 +38,7 @@ class HigDim_AnnDS(AnnDataset):
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
         self.n_timepoint = n_timepoint
+        self.deltax_key = deltax_key
         self.popD['t'] = self.popD['t'][:n_timepoint]
 
         # subset the adata
@@ -53,7 +54,14 @@ class HigDim_AnnDS(AnnDataset):
 
         self.s = torch.from_numpy(cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
-    
+
+        if deltax_key is None:
+            self.deltax = None
+        elif deltax_key in self.adata.obsm_keys():
+            self.deltax = self.adata.obsm[deltax_key].copy()
+        elif deltax_key in self.adata.layers():
+            self.deltax = self.adata.layers[deltax_key].copy()
+        
 
         if norm_time:
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
@@ -183,6 +191,11 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
         s = torch.from_numpy(self.cellstate[s_index]).float()
 
+        if self.self.deltax is not None:
+            deltax = torch.from_numpy(self.deltax[s_index]).float()
+        else:
+            deltax = None
+
         # get time
         t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
         t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
@@ -192,7 +205,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        return  s, (t, t_p1), (u_t, u_tp1)
+        return  s, (t, t_p1), (u_t, u_tp1), deltax
     
                                 ################################
                                 ## Trajectory Dependent  DS   ##

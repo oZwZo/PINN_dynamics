@@ -38,6 +38,8 @@ parser.add_argument("--batch_size", type=int, required=False, default=200, help=
 parser.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 parser.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
+parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
+parser.add_argument("--deltax_weight", type=float, required=False, default=1e-4, help='the weight used to regularize the similarity of deltax and v')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
@@ -92,6 +94,7 @@ model = model_class(
         activation_fn='Tanh',
         ode_tol = args.tol,
         D_penalty = args.D_penalty, 
+        deltax_weight = args.deltax_weight,
         weight_intensity = args.weight_intensity,
         **model_kws
     )
@@ -119,6 +122,7 @@ train_DS = reader.TwoTimpepoint_AnnDS(
                             cellstate_key=args.cellstate_key,  #'DM_EigenVector'
                             log_transform=False,
                             norm_time=False,
+                            deltax_key=args.deltax_key,
                             batchsize=args.batch_size)
 
 def my_collection_fn(batch):

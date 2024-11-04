@@ -341,7 +341,7 @@ def _sample_by_distance(dist_array, candidate_idx, alpha=None, repeat=1):
         neighbor_idx = neighbor_idx[0]
     return neighbor_idx, p
 
-def sample_deltax(adata, max_degree=1, k=None, pseudotimekey='palantir_pseudotime', progressbar=True):
+def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=True):
     """
     the Key function defines the noise sampling process 
     given the starting point i
@@ -353,8 +353,13 @@ def sample_deltax(adata, max_degree=1, k=None, pseudotimekey='palantir_pseudotim
 
     if k is None:
         k  = adata.uns['neighbors']['params']['n_neighbors']
-
-    X = adata.X
+    
+    if xkey is None:
+        X = adata.X
+    elif xkey in adata.obsm_keys():
+        X = adata.obsm[xkey].copy()
+    elif xkey in adata.layers():
+        X = adata.layers[xkey].copy()
 
     def prograss_(x, turn_on=progressbar):
         if turn_on:
@@ -363,7 +368,7 @@ def sample_deltax(adata, max_degree=1, k=None, pseudotimekey='palantir_pseudotim
             return x
     
     delta_X = []
-
+    neighbor_ls = []
     
     for i in prograss_(range(X.shape[0]), progressbar):
 
@@ -377,44 +382,48 @@ def sample_deltax(adata, max_degree=1, k=None, pseudotimekey='palantir_pseudotim
 
         final_index = []
         
-        while pass_1*pass_2==0 and n_degree < max_degree:
-            
+        # while pass_1*pass_2==0 and n_degree < max_degree:
+        # for d in range(max_degree):  
             # if n_degree > self.free_search_degree:   # only under this degree can we expand knn without any constraints
             #     knn_idx = pass_2_idx
         
-            knn_idx = traverse_neighbor(connectivities, k, knn_idx) 
+            # knn_idx = traverse_neighbor(connectivities, k, knn_idx) 
+        knn_idx = np.argpartition(connectivities[i].A, -1*k)[-1*k:].tolist()
 
-            # 1 : neighbor with the same condition
-            pass_1_idx = knn_idx
-            if len(pass_1_idx) > 0:
-                pass_1 = 1
-            else:
-                final_index = knn_idx
-                continue
+        # 1 : neighbor with the same condition
+        pass_1_idx = knn_idx
+        if len(pass_1_idx) > 0:
+            pass_1 = 1
+        else:
+            final_index = [i]
+            # continue
 
-            # 2 : neighbor with bigger pseudo-time
-            knn_t = pdt[pass_1_idx]
-            if np.any(knn_t > t_i):
-                pass_2_idx = np.array(pass_1_idx)[knn_t > t_i]
-                pass_2 = 1
+        # 2 : neighbor with bigger pseudo-time
+        knn_t = pdt[pass_1_idx]
+        if np.any(knn_t > t_i):
+            pass_2_idx = np.array(pass_1_idx)[knn_t > t_i]
+            final_index = pass_2_idx
+            pass_2 = 1
 
-            else:
-                pass_2_idx = pass_1_idx
-                final_index = knn_idx
-                continue
-            n_degree += 1
+        else:
+            pass_2_idx = pass_1_idx
+            final_index = [i]
+            # continue
+            # n_degree += 1
                     
         # sampled by distance
 
-        knn_p = connectivities[i,pass_2_idx]
-        p = knn_p / knn_p.sum() if knn_p.sum() != 0 else None
-
-        if len(final_index) == 0:
-            final_index = knn_idx
+        
+        if len(final_index) == 1:
             neighbor_idx = i
         else:
-            neighbor_idx, p = _sample_by_distance(distance, final_index)
+            # neighbor_idx, p = _sample_by_distance(distance, final_index)
+            knn_p = connectivities[i,final_index].A.flatten()
+            p = knn_p / knn_p.sum() if knn_p.sum() != 0 else None
 
-        delta_X.append( X[neighbor_idx] - X[[i]] )
+            neighbor_idx = np.random.choice(final_index, p=p)
 
-    return delta_X
+        delta_X.append( X[neighbor_idx] - X[i] )
+        neighbor_ls.append(neighbor_idx)
+
+    return delta_X, neighbor_ls
