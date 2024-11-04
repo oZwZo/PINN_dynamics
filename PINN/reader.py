@@ -191,7 +191,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
         s = torch.from_numpy(self.cellstate[s_index]).float()
 
-        if self.self.deltax is not None:
+        if self.deltax is not None:
             deltax = torch.from_numpy(self.deltax[s_index]).float()
         else:
             deltax = None

@@ -9,8 +9,8 @@ from ._PINN_base import PINN_base, PINN_base_sim
 from .MLP_models import MLP_surrogate
 from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from typing import Any, Union, Callable
-# from torchdiffeq import odeint
-from torchdiffeq import odeint_adjoint as odeint
+from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint 
 from TorchDiffEqPack import odesolve_adjoint_sym12
 from kan import KAN
 import matplotlib.pyplot as plt
@@ -332,7 +332,7 @@ class pde_params_base(pl.LightningModule):
 
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None):
+    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
         r"""
         mlp u theta
 
@@ -357,6 +357,7 @@ class pde_params(pde_params_base):
         
         self.time_sensitive = time_sensitive
         self.lr = lr
+        self.time_scale_factor = 5 if time_scale_factor is None else time_scale_factor
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
         self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
@@ -420,8 +421,8 @@ class pde_params(pde_params_base):
         s, (t, tp1), (ut, utp1), deltax = train_batch
 
         # divided by 5 to reduce the integration time
-        t0 = t[0].item() / 5
-        t1 = tp1[0].item() / 5 
+        t0 = t[0].item() / self.time_scale_factor
+        t1 = tp1[0].item() / self.time_scale_factor 
 
         device = s.device
 
@@ -444,7 +445,7 @@ class pde_params(pde_params_base):
         step_size = step_size if step_size > 0 else 0.05
         step_size = min(step_size, 0.4)
 
-        u_int, s_t = odeint(
+        u_int, s_t = odeint_adjoint(
                         self,
                         y0 = init_condition,
                         t = torch.tensor([t0, t1]).type(torch.float32).to(device),
@@ -463,7 +464,7 @@ class pde_params(pde_params_base):
         D_norm = self.restrict_D(s, t, exp=True)
         v_loss = self.constrain_v(s,t,deltax)
 
-        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss
+        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
 
 
         with torch.no_grad():
@@ -492,12 +493,12 @@ class pde_params(pde_params_base):
         ub_loss = self.loss_fn(ut.squeeze(), u_pred.squeeze())
 
         init_condition = (ut, s)
-        u_int, s_t = odeint(
+        u_int, s_t = odeint_adjoint(
                         self,
                         y0 = init_condition,
                         t = torch.tensor([t, tp1]).type(torch.float32).to(device),
-                        atol=1e-5,
-                        rtol=1e-5,
+                        atol=self.ode_tol,
+                        rtol=self.ode_tol,
                         method='dopri5',
                         adjoint_options={'norm':'seminorm'},
                     )
@@ -511,6 +512,106 @@ class pde_params(pde_params_base):
             {"boundary_loss":ub_loss,
              "integrat_loss":utp1_loss,
              "total_loss":total_loss})
+
+    def stratified_ode(self, t, states):
+        """
+        the function used for odeint
+        """
+        s = states[1]
+        device = s.device
+        t_in = torch.full((s.shape[0],1), t.item()*5).float().to(device)
+
+        with torch.set_grad_enabled(True):
+
+            s.requires_grad_(True)
+            t_in.requires_grad_(True)
+
+            u = torch.exp(self.u(s, t_in)) # make sure it is u but not log u
+
+            _, growth, drift, diffuse = self.equation(s, t_in)
+
+            dudt = growth - drift + diffuse
+
+            # set ds to zeros to fix cellstates
+            ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
+
+        return (dudt, ds, growth, -1 * drift, diffuse)
+
+    def statify_flow(self, train_DS, batch_size=1024, window_size=1):
+        r"""
+        stratify the constribution of cells
+
+        Arguments:
+        -----------
+        train_DS: highdim_DS class
+        batch_size : batch_size for looping the adataset
+        window_size: the time window for integral, 1 for next timepoint
+
+        Returns
+        -----------
+        dilution_flow : density gain from growth
+        dirft_flow : density gain from differetiation
+        diffuse_flow : density gain from random diffusion
+        """
+        # get device from module
+        device = next(self.u.parameters()).device
+
+        n_timepoint = train_DS.n_timepoint
+        t_list = train_DS.T_b / self.time_scale_factor
+        u_b = train_DS.u_b.reshape(n_timepoint, -1)
+        cellstate = torch.from_numpy(train_DS.cellstate).float().requires_grad_()
+
+        
+
+        dilution_flow = []
+        dirft_flow = []
+        diffuse_flow = []
+        
+        for it in range(n_timepoint-window_size):
+            
+            t_i = t_list[it]
+            t_ip1 = t_list[it + window_size]
+
+            g_flow_ls = []
+            v_flow_ls = []
+            d_flow_ls = []
+
+            for i in range(0, cellstate.shape[0], batch_size):
+
+                u_t0 = u_b[it, i:i+batch_size].to(device)
+                s = cellstate[i:i+batch_size].to(device)
+                
+                # (dudt, ds, growth, -1 * drift, diffuse)
+                init_condition = (u_t0, s, 
+                                  torch.zeros_like(u_t0).to(device), 
+                                  torch.zeros_like(u_t0).to(device), 
+                                  torch.zeros_like(u_t0).to(device))
+                
+                u_int, s_t, g_flow, v_flow, d_flow = odeint(
+                                self.stratified_ode,
+                                y0 = init_condition,
+                                t = torch.tensor([t_i, t_ip1]).type(torch.float32).to(device),
+                                atol = self.ode_tol,
+                                rtol = self.ode_tol,
+                                method='dopri5',
+                            )
+
+                # append for different batches
+                g_flow_ls.append( g_flow[1].detach().cpu().numpy() )
+                v_flow_ls.append( v_flow[1].detach().cpu().numpy() )
+                d_flow_ls.append( d_flow[1].detach().cpu().numpy() )
+
+                torch.cuda.empty_cache()
+            
+            # append for different timepoints
+            dilution_flow.append( np.concatenate(g_flow_ls, axis=0) )
+            dirft_flow.append( np.concatenate(v_flow_ls, axis=0) )
+            diffuse_flow.append( np.concatenate(d_flow_ls, axis=0) )
+        
+        
+        return np.stack(dilution_flow), np.stack(dirft_flow), np.stack(diffuse_flow)
+
+    
 
 
 class pde_singlebranch_twotimepoints(pde_params_base):
@@ -696,7 +797,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # init condition : ut, s in a square, u in a square
         N =  ut0.sum()
         init_condition = (ut0, s)
-        u_int, s_int = odeint(
+        u_int, s_int = odeint_adjoint(
                     self,
                     init_condition,
                     torch.Tensor([t0,t1]).type(torch.float32).to(device),
@@ -783,7 +884,7 @@ class pde_singlebranch_twotimepoints(pde_params_base):
         # init condition : ut, s in a square, u in a square
         N =  ut0.sum()
         init_condition = (ut0, s)
-        u_int, s_int = odeint(
+        u_int, s_int = odeint_adjoint(
                     self.ode_func,
                     init_condition,
                     torch.Tensor([t0,t1]).type(torch.float32).to(device),
@@ -1059,7 +1160,7 @@ class pde_params_meshgrid(pde_params_base):
 
             # init condition : ut, s in a square, u in a square
             init_condition = (ut0, s_neighbor, u_neighbor_t0)
-            u_int, s, u_neighbor_int = odeint(
+            u_int, s, u_neighbor_int = odeint_adjoint(
                         self.ode_func,
                         init_condition,
                         t_list.type(torch.float32).to(device),
