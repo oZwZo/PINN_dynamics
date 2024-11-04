@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, re
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -8,7 +8,7 @@ from PINN import reader, models, pl, tl
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from TorchDiffEqPack import odesolve
-from torchdiffeq import odeint
+from torchdiffeq import odeint_adjoint as odeint
 
 import matplotlib as mpl
 import seaborn as sns
@@ -17,7 +17,18 @@ from matplotlib.patches import Patch
 os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
 
 # CHANG THIS !!!!!
-ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_2/checkpoints/epoch=9-total_loss=1.09317279.ckpt"
+ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_4/checkpoints/epoch=101-total_loss=0.32358119.ckpt"
+
+result_dir = "results/" + "/".join(ckpt_path.split("/")[1:3]) 
+result_base = re.match(r".*/(version_\d{1,2})/.*", ckpt_path).group(1)
+
+if not os.path.exists(result_dir):
+    try:
+        os.mkdir(result_dir)
+    except:
+        os.mkdir(os.path.dirname(result_dir))
+        os.mkdir(result_dir)
+
 
 model_name = ckpt_path.split("/")[2].replace("_tsense","")
 model_class = eval(f"models.{model_name}")
@@ -33,7 +44,7 @@ timepoints = adata.uns['pop']['t']
 cellstate_key = ckpt_path.split("/")[1].split("-")[1].split("_n")[0]
 
 n_timepoint = int(ckpt_path.split("/")[1].split("-")[1].split("_n")[1])
-n_dimension =10
+n_dimension = 5
 
 # the DS
 DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,  
@@ -43,6 +54,7 @@ DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,
                               norm_time=False,
                               batchsize = 300
                               )
+
 # adata
 t7_ad = DS_t7.adata.copy()
 u_b = DS_t7.u_b.cpu().numpy().reshape(n_timepoint, -1)
@@ -65,14 +77,17 @@ if "u" in dir(pde_model):
     PINN.pl.params_in_umap(t7_ad, u_pred_b, param='u pred by forward', cell_of_t=False);
 
 # other params
-dynamics_params = ['g', 'v', 'D']
+dynamics_params = ['g', 'D', 'v']
 
 if pde_model.time_sensitive:
     for param in dynamics_params:
         param_pred = pde_model.predict_param(DS_t7, param=param);
         if param_pred.shape[1] != t7_ad.shape[0]:
-            param_pred = param_pred.reshape(5, -1, n_dimension)
-            param_pred = pde_model.trace_div(param_pred,)
+            param_pred = param_pred.reshape(n_timepoint, -1, n_dimension)
+            param_pred = pde_model.trace_div(param_pred,cellstate)
+        
+        # saved
+        np.save(f"{result_dir}/{result_base}_{param}.npy", param_pred)
         PINN.pl.params_in_umap(t7_ad, param_pred, param=param, cell_of_t=False);
 else:
     for param in dynamics_params:
@@ -92,9 +107,9 @@ else:
 ## predict u with ode integrat
 u_int_all = [u_b[0]]
 chunk_size= 500
-# t_list = timepoints / 15
+t_list = timepoints / 10
 it = 0
-for t0, t1 in tqdm(zip(timepoints[:-1], timepoints[1:])):
+for t0, t1 in tqdm(zip(t_list[:-1], t_list[1:])):
 
     u_t_ls = []
 
@@ -110,34 +125,39 @@ for t0, t1 in tqdm(zip(timepoints[:-1], timepoints[1:])):
 
 
         u_t, s_t = odeint(
-                        pde_model.ode_func,
-                        init_condition,
-                        torch.tensor([t0, t1]).type(torch.float32).to(device)/15,
-                        atol=1e-8,
-                        rtol=1e-8,
-                        method='midpoint',
-                        options = {'step_size': step_size}
+                        pde_model,
+                        y0 = init_condition,
+                        t = torch.tensor([t0, t1]).type(torch.float32).to(device),
+                        atol=1e-4,
+                        rtol=1e-4,
+                        method='dopri5',
+                        adjoint_options={'norm':'seminorm'},
                     )
 
         torch.cuda.empty_cache()
 
-        u_t_ls.append(u_t[-1].detach().cpu().numpy())
+        u_int = torch.nn.functional.relu(u_t[-1])
+        u_t_ls.append(u_int.detach().cpu().numpy())
         del u_t, s_t
         torch.cuda.empty_cache()
 
     u_int = np.concatenate(u_t_ls)
     
     u_int_all.append(u_int)
-    it+=0
+    it+=1
 
 u_int_all = np.stack(u_int_all)
+
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
 
-PINN.pl.params_in_umap(t7_ad, u_int_all, param='u by integrat', cell_of_t=False);
+PINN.pl.params_in_umap(t7_ad, u_b, param='u b', cell_of_t=True);
+PINN.pl.params_in_umap(t7_ad, u_int_all, param='u by integrat', cell_of_t=True);
 PINN.pl.params_in_umap(t7_ad, u_int_all, timepoints=timepoints, param='u by integrat', cell_of_t=False);
 
+
+ct_key = 'label_man'
 
 # add the density into obs
 for i, d in enumerate(timepoints):
@@ -150,37 +170,50 @@ for i, d in enumerate(timepoints):
 
 obs = t7_ad.obs.copy()
 
-proint_columns = ['p_int_3', 'p_int_7', 'p_int_12',
-       'p_int_27', 'p_int_49', 'p_int_76', 'p_int_112', 'p_int_161',
-       'p_int_269'] 
-probs_columns =['p_obs_3', 'p_obs_7', 'p_obs_12', 'p_obs_27', 'p_obs_49',
-       'p_obs_76', 'p_obs_112', 'p_obs_161', 'p_obs_269']
+proint_columns = ['p_int_%s'%t for t in timepoints] 
+probs_columns =['p_obs_%s'%t for t in timepoints] 
 # density by cell type
 
 
-cm_celltype = dict(zip(t7_ad.obs.anno_man.cat.categories ,t7_ad.uns['anno_man_colors']))
-cm_leiden = dict(zip(t7_ad.obs.leiden.cat.categories ,t7_ad.uns['leiden_colors']))
+cm_celltype = dict(zip(t7_ad.obs[ct_key].cat.categories ,t7_ad.uns[f'{ct_key}_colors']))
 
 
-p_by_celltype = obs[probs_columns+proint_columns+['anno_man']].groupby("anno_man").agg("sum")
-p_celltype_melt = pd.melt(p_by_celltype.reset_index(), id_vars=['anno_man'])
+p_by_celltype = obs[probs_columns+proint_columns+[ct_key]].groupby(ct_key).agg("sum")
+p_celltype_melt = pd.melt(p_by_celltype.reset_index(), id_vars=[ct_key])
 p_celltype_melt['data'] = p_celltype_melt['variable'].str.extract(r"p_(\w{3})_\d")
 p_celltype_melt['time'] = p_celltype_melt['variable'].str.extract(r"p_\w{3}_(\d*)")
 
-p_by_leiden = obs[probs_columns+proint_columns+['leiden']].groupby("leiden").agg("sum")
-p_leiden_melt = pd.melt(p_by_leiden.reset_index(), id_vars=['leiden'])
-p_leiden_melt['data'] = p_leiden_melt['variable'].str.extract(r"p_(\w{3})_\d")
-p_leiden_melt['time'] = p_leiden_melt['variable'].str.extract(r"p_\w{3}_(\d*)")
-
-
 
 plt.figure(figsize=(9, 3), dpi=300)
-ax=stack_catplot(x='time', y='value', cat='data', stack='anno_man', data=p_celltype_melt , palette=cm_celltype)
+ax=PINN.pl.stack_catplot(x='time', y='value', cat='data', stack=ct_key, data=p_celltype_melt , palette=cm_celltype)
 ax.set_xlabel("time")
 ax.set_ylabel("cell type proportion")
 
 
-plt.figure(figsize=(10, 5), dpi=300)
-ax=stack_catplot(x='time', y='value', cat='data', stack='leiden', data=p_leiden_melt , palette=cm_leiden)
-ax.set_xlabel("time")
-ax.set_ylabel("cell cluster proportion")
+fig, axs = plt.subplots(1, n_timepoint, figsize=(3*n_timepoint, 6), dpi=300, sharey=True)
+for i, t in enumerate(timepoints):
+    t = str(t)
+    ax=axs[i]
+
+    sns.barplot(data=p_celltype_melt.query("`time` == @t"), 
+                # color=ct_key, #palette=cm_celltype,
+                edgecolor='gray', width=0.7,
+                x = 'value', y=ct_key, hue='data', ax=ax)
+    
+    for bars, hatch, legend_handle in zip(ax.containers, ['', '//'], ax.legend_.legendHandles):
+        for bar, color in zip(bars, cm_celltype.values()):
+            alpha = 1 if hatch == '' else 0.5
+            bar.set_alpha(alpha)
+            bar.set_facecolor(color)
+            bar.set_hatch(hatch)
+        # update the existing legend, use twice the hatching pattern to make it denser
+        legend_handle.set_hatch(hatch + hatch)
+
+    sns.despine()
+    axs[i].set_xlabel("")
+    if i!=0:
+        axs[i].legend([], frameon=False)
+
+axs[0].set_ylabel("")
+axs[1].set_xlabel("cell type proportion")
+
