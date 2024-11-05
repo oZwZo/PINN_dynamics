@@ -535,7 +535,7 @@ class pde_params(pde_params_base):
             # set ds to zeros to fix cellstates
             ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
 
-        return (dudt, ds, growth, -1 * drift, diffuse)
+        return (dudt, ds, growth, drift, diffuse)
 
     def statify_flow(self, train_DS, batch_size=1024, window_size=1):
         r"""

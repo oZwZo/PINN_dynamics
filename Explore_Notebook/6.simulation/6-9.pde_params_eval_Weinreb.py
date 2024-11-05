@@ -23,8 +23,8 @@ os.chdir("/home/wergillius/Project/PINN_dynamics")
 
 
 ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_4/checkpoints/epoch=53-total_loss=0.21702482.ckpt"
-# if __name__ == '__main__':
-#     ckpt_path = sys.argv[1]
+if __name__ == '__main__':
+    ckpt_path = sys.argv[1]
 
 # CHANG THIS !!!!!
 n_dimension = 5
@@ -248,28 +248,32 @@ for key, flow in stratified_flow.items():
 cm_celltype = dict(zip(t7_ad.obs[ct_key].cat.categories ,t7_ad.uns[f'{ct_key}_colors']))
 
 for i, d in enumerate(timepoints[1:]):
+
+    # # stratified
     flow_key_obs = t7_ad.obs.groupby(ct_key).agg({f'Day{d} {key}':'sum' for key in stratified_flow})
     flow_melt_obs = flow_key_obs.reset_index().melt(id_vars=ct_key, var_name='flow')
 
-    fig = plt.figure()
-    sns.catplot(data = flow_melt_obs, y = ct_key, hue=ct_key, x = 'value', col='flow', kind='bar', sharex=False, palette=cm_celltype)
-    fig.savefig(f'{plot_save}/Day{d}_stratify_flow.png', transparent=True, bbox_inches='tight', dpi=200)
+    g1 = sns.catplot(data = flow_melt_obs, y = ct_key, hue=ct_key, x = 'value', col='flow', kind='bar', sharex=False, palette=cm_celltype)
+    g1.savefig(f'{plot_save}/Day{d}_stratify_flow.png', transparent=True, bbox_inches='tight', dpi=200)
 
     # stratified flow fold chanage
     density_change = t7_ad.obs[f'u_int_{d}'].values - t7_ad.obs[f'u_int_{timepoints[i]}'].values
     t7_ad.obs[f'Day{d} u change'] = density_change
 
     agg_change = t7_ad.obs.groupby(ct_key).agg({f'Day{d} u change':'sum'}).values
-    # for flow in stratified_flow:
-    #     t7_ad.obs[f'Day{d} {flow} fc'] = t7_ad.obs[f'Day{d} {flow}'] / density_change
-
     flow_fc_obs = flow_key_obs / agg_change
     flow_melt_fc = flow_fc_obs.reset_index().melt(id_vars=ct_key, var_name='flow')
 
-    fig = plt.figure()
-    sns.catplot(data = flow_melt_fc, y = ct_key, hue=ct_key, x = 'value', col='flow', kind='bar', sharex=False, palette=cm_celltype)
-    fig.savefig(f'{plot_save}/Day{d}_contribution.png', transparent=True, bbox_inches='tight', dpi=200)
+    g2 = sns.catplot(data = flow_melt_fc, y = ct_key, hue=ct_key, x = 'value', col='flow', kind='bar', sharex=False, palette=cm_celltype)
+    g2.savefig(f'{plot_save}/Day{d}_contrib.png', transparent=True, bbox_inches='tight', dpi=200)
 
+
+    norm_u = t7_ad.obs.groupby(ct_key).agg({f'u_int_{d}':'sum'}).values
+    flow_key_norm = flow_key_obs / norm_u
+    flow_melt_norm = flow_key_norm.reset_index().melt(id_vars=ct_key, var_name='flow')
+
+    g3 = sns.catplot(data = flow_melt_norm, y = ct_key, hue=ct_key, x = 'value', col='flow', kind='bar', sharex=False, palette=cm_celltype)
+    g3.savefig(f'{plot_save}/Day{d}_stratify_flow_norm.png', transparent=True, bbox_inches='tight', dpi=200)
 
 
 
