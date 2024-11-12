@@ -68,7 +68,7 @@ train_DS = reader.AllTimepoint_MeshGrid(AnnData=adata,
                                 resampling_indensity=0.3, 
                                 resampling_rate=0.3,
                                 n_timepoint = args.n_timepoint,
-                                timepoint_key = 'time',
+                                timepoint_key = 'timepoint',
                                 cellstate_key=args.cellstate_key,  #'Actb_Kcnn4_scaled_S'
                                 n_grid=args.n_grid,  
                                 nearby_cellstate=args.nearby_cellstate, 

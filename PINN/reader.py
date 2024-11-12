@@ -14,7 +14,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, **kwargs):
+    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -31,6 +31,7 @@ class HigDim_AnnDS(AnnDataset):
         timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
         pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
         log_transform : bool, default False, whether the population size will be log transformed to reduce the magnitude of the data
+        base_cellstate : np array, the space to evaluate the density
 
         """
         super().__init__(**kwargs)
@@ -49,7 +50,7 @@ class HigDim_AnnDS(AnnDataset):
 
         # use the cell state key of the entire dataset 
         # as it tells what are the possible points of the entire cell state space 
-        cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension]
+        cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension] if base_cellstate is None else base_cellstate
         self.cellstate = cellstate
 
         self.s = torch.from_numpy(cellstate).float()
@@ -191,7 +192,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
         s = torch.from_numpy(self.cellstate[s_index]).float()
 
-        if self.self.deltax is not None:
+        if self.deltax is not None:
             deltax = torch.from_numpy(self.deltax[s_index]).float()
         else:
             deltax = None
