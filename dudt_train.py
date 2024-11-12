@@ -137,7 +137,7 @@ def my_collection_fn(batch):
 
     return s, (t, t_p1), (u_t, u_tp1)
 
-train_DL = DataLoader(train_DS, batch_size=None, num_workers=20)
+train_DL = DataLoader(train_DS, batch_size=None, num_workers=10)
 # train_iter = iter(train_DL)
 # s, (t, t_p1), (u_t, u_tp1) = next(train_iter)
 
