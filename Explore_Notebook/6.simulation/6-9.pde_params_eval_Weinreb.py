@@ -22,7 +22,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 os.chdir("/home/wergillius/Project/PINN_dynamics")
 
 
-ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_4/checkpoints/epoch=53-total_loss=0.21702482.ckpt"
+# ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_5/checkpoints/epoch=17-total_loss=0.31139943.ckpt"
+# ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
 if __name__ == '__main__':
     ckpt_path = sys.argv[1]
 
@@ -32,7 +33,7 @@ ct_key = 'label_man'
 
 
 date = time.strftime("%b%d")
-result_dir = "results/" + "/".join(ckpt_path.split("/")[1:3]) + f"_{date}"
+result_dir = "results/" + "/".join(ckpt_path.split("/")[1:3]) + f"_{date}_onbase"
 result_base = re.match(r".*/(version_\d{1,2})/.*", ckpt_path).group(1)
 
 if not os.path.exists(result_dir):
@@ -62,12 +63,17 @@ timepoints = adata.uns['pop']['t']
 cellstate_key = ckpt_path.split("/")[1].split("-")[1].split("_n")[0]
 n_timepoint = int(ckpt_path.split("/")[1].split("-")[1].split("_n")[1])
 
+
+full_adata = sc.read_h5ad(f"data/klein_subset.h5ad")
+base_cellstate = full_adata.obsm[cellstate_key][:,:n_dimension].copy()
+
 # the DS
 DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,  
                             n_dimension = n_dimension,
                               cellstate_key=cellstate_key,  #'DM_EigenVector'
                               log_transform=False,
                               norm_time=False,
+                              base_cellstate = base_cellstate,
                               batchsize = 300
                               )
 
@@ -75,6 +81,9 @@ DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,
 t7_ad = DS_t7.adata.copy()
 u_b = DS_t7.u_b.cpu().numpy().reshape(n_timepoint, -1)
 cellstate = torch.from_numpy(DS_t7.cellstate).float()
+
+if cellstate.shape[0] > t7_ad.shape[0]:
+    t7_ad = full_adata
 
 DM_range = (cellstate.max(axis=0).values - cellstate.min(axis=0).values).cpu().numpy()
 
@@ -136,6 +145,8 @@ v_norm = v_pred_ay / DM_range[None,None,:]
 v_norm2 = np.sqrt(np.power(v_norm,2).mean(axis=2))
 fig_v2, axs_v = PINN.pl.params_in_umap(t7_ad, v_norm2, param=r'$||v||^2$', cell_of_t=False);
 
+np.save(f"{result_dir}/{result_base}_v.npy", v_pred_ay)
+np.save(f"{result_dir}/{result_base}_v_norm.npy", v_norm2)
 # PINN.pl.params_in_umap(t7_ad, v_norm2, param=r'$||v||^2$', cell_of_t=True);
 
 
@@ -143,7 +154,7 @@ fig_v2, axs_v = PINN.pl.params_in_umap(t7_ad, v_norm2, param=r'$||v||^2$', cell_
 
 ## generate adata base on cellsate coords
 import scvelo as scv
-cellstate_ad = PINN.tl.make_coord_adata(adata, cellstate_key=cellstate_key, v = v_pred_ay)
+cellstate_ad = PINN.tl.make_coord_adata(t7_ad, cellstate_key=cellstate_key, v = v_pred_ay)
 vkeys = [k for k in list(cellstate_ad.layers.keys()) if k.endswith("v")]
 sc.pp.neighbors(cellstate_ad, n_neighbors=15)
 
@@ -184,7 +195,6 @@ for t0, t1 in tqdm(zip(t_list[:-1], t_list[1:])):
         step_size = step_size if step_size > 0 else 0.05
         step_size = min(step_size, 0.4)
 
-
         u_t, s_t = odeint(
                         pde_model,
                         y0 = init_condition,
@@ -212,10 +222,39 @@ u_int_all = np.stack(u_int_all)
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
-
 fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b, param='u b', cell_of_t=True);
 fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all, param='u by integrat', cell_of_t=True);
 fig_int2, axs = PINN.pl.params_in_umap(t7_ad, u_int_all, timepoints=timepoints, param='u by integrat', cell_of_t=False);
+
+from scipy.stats import pearsonr
+from scipy.special import kl_div
+
+
+KLD_ls = []
+for t in range(u_b.shape[0]):
+    p_b = u_b[t] / u_b[t].sum()
+    p_int = u_int_all[t] / u_int_all[t].sum()
+    p_b += 1e-34
+    p_int += 1e-34
+
+    KLD_ls.append(kl_div(p_b, p_int).sum())
+
+
+def W_distance(u_b, u_int_all, p=2):
+    distance_ls = []
+    for t in range(u_b.shape[0]):
+        p_b = u_b[t] / u_b[t].sum()
+        p_int = u_int_all[t] / u_int_all[t].sum()
+        if p==1:
+            w = np.abs(p_b - p_int)
+        elif p > 1:
+            w = np.power(p_b - p_int, p)
+            w = w**(1/p)
+        distance_ls.append(np.sum(p_b*w))
+    return distance_ls
+
+W1 = W_distance(u_b, u_int_all, p=1)
+W2 = W_distance(u_b, u_int_all)
 
 # add the density into obs
 for i, d in enumerate(timepoints):
@@ -224,9 +263,6 @@ for i, d in enumerate(timepoints):
 
     t7_ad.obs[f'p_int_{d}'] = u_int_all[i] / u_int_all[i].sum()
     t7_ad.obs[f'p_obs_{d}'] = u_b[i] / u_b[i].sum()
-
-
-
 
 gflow, vflow, dflow = pde_model.statify_flow(DS_t7)
 stratified_flow = {
@@ -249,7 +285,7 @@ cm_celltype = dict(zip(t7_ad.obs[ct_key].cat.categories ,t7_ad.uns[f'{ct_key}_co
 
 for i, d in enumerate(timepoints[1:]):
 
-    # # stratified
+    # stratified
     flow_key_obs = t7_ad.obs.groupby(ct_key).agg({f'Day{d} {key}':'sum' for key in stratified_flow})
     flow_melt_obs = flow_key_obs.reset_index().melt(id_vars=ct_key, var_name='flow')
 
@@ -277,29 +313,21 @@ for i, d in enumerate(timepoints[1:]):
 
 
 
-
-
 obs = t7_ad.obs.copy()
 
 proint_columns = ['p_int_%s'%t for t in timepoints] 
 probs_columns =['p_obs_%s'%t for t in timepoints] 
 # density by cell type
 
-
-
-
-
 p_by_celltype = obs[probs_columns+proint_columns+[ct_key]].groupby(ct_key).agg("sum")
 p_celltype_melt = pd.melt(p_by_celltype.reset_index(), id_vars=[ct_key])
 p_celltype_melt['data'] = p_celltype_melt['variable'].str.extract(r"p_(\w{3})_\d")
 p_celltype_melt['time'] = p_celltype_melt['variable'].str.extract(r"p_\w{3}_(\d*)")
 
-
 plt.figure(figsize=(9, 3), dpi=300)
 ax=PINN.pl.stack_catplot(x='time', y='value', cat='data', stack=ct_key, data=p_celltype_melt , palette=cm_celltype)
 ax.set_xlabel("time")
 ax.set_ylabel("cell type proportion")
-
 
 fig_subplot, axs = plt.subplots(1, n_timepoint, figsize=(3*n_timepoint, 6), dpi=300, sharey=True)
 for i, t in enumerate(timepoints):
@@ -345,4 +373,4 @@ savefig(fig_int2, 'simulation')
 
 print("===============================================================")
 print("finished")
-print("visualization saved to ", f'{result_dir}/{result_base}_plot.pdf')
+print("visualization saved to ", f'{result_dir}/{result_base}_plot')
