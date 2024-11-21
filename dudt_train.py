@@ -29,17 +29,17 @@ parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="
 parser.add_argument("-M", "--model", type=str, required=False, default="pde_params", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
-parser.add_argument("--lr", type=float, required=False, default=3e-3, help='the learning rate for training the model')
-parser.add_argument("--schedule_lr", type=str, required=False, default="StepLR", help='LambdaLR if passing a lambda expression, else StepLR')
+parser.add_argument("--lr", type=float, required=False, default=3e-4, help='the learning rate for training the model')
+parser.add_argument("--schedule_lr", type=str, required=False, default="CyclicLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
-parser.add_argument("--n_timepoint", type=int, required=False, default=7, help='the number of time point to train the model')
+parser.add_argument("--timepoint_idx", type=str, required=False, default=None, help='the number of time point to train the model')
 parser.add_argument("--batch_size", type=int, required=False, default=200, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
 parser.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
 parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
-parser.add_argument("--deltax_weight", type=float, required=False, default=1e-4, help='the weight used to regularize the similarity of deltax and v')
+parser.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
 args = parser.parse_args()
@@ -56,23 +56,26 @@ args = parser.parse_args()
 
 path = os.path.abspath(".")
 h5_path = os.path.join(path, f'{args.dataset}.h5ad')
-
+# find adata path
 if not os.path.exists(h5_path):
     main_path = path
     h5_path = os.path.join(path, f'data/{args.dataset}.h5ad')
 else:
     main_path = os.path.dirname(path)
 
+adata = sc.read_h5ad(h5_path)
 
-save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_n{args.n_timepoint}", args.model+['','_tsense'][args.time_sensitive])
+if args.timepoint_idx is None:
+    timepoint_idx = adata.uns['pop']['t'][-1]
+else:
+    timepoint_idx = eval(args.timepoint_idx)
+
+save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_n{timepoint_idx}", args.model+['','_tsense'][args.time_sensitive])
 if not os.path.exists(os.path.dirname(save_path)):
     os.mkdir(os.path.dirname(save_path))
 
 if not os.path.exists(save_path):
     os.mkdir(save_path)
-
-
-adata = sc.read_h5ad(h5_path)
 
 # define model
 model_class = eval(f"models.{args.model}")
@@ -117,7 +120,7 @@ if args.pretrained is not None:
 
 train_DS = reader.TwoTimpepoint_AnnDS(
                             AnnData=adata, 
-                            n_timepoint=args.n_timepoint,  
+                            timepoint_idx=timepoint_idx, 
                             n_dimension = args.n_dimension,
                             cellstate_key=args.cellstate_key,  #'DM_EigenVector'
                             log_transform=False,
@@ -150,8 +153,7 @@ gpu_device = args.gpu_devices
 trainer = pl.Trainer(
                     #auto_lr_find=True,
                     accelerator=device,
-                    # fast_dev_run=Tru
-                    # e,
+                    # fast_dev_run=True,
                     # gradient_clip_val=0.5,
                     default_root_dir=save_path,
                     devices = [gpu_device], 
