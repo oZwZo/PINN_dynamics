@@ -20,7 +20,7 @@ def format_ay(array):
     formated  = [np.format_float_scientific(u, precision=2) for u in array]
     return formated
 
-def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cell_of_t=True):    
+def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cell_of_t=True, log=False, clipping=None):    
     r"""
     Visaulize the fitted behavior params in umap and by time
 
@@ -53,6 +53,9 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cel
 
     if timepoints is None:
         timepoints = adata.uns['pop']['t'][:prediction.shape[0]]
+
+    if clipping is not None:
+        assert len(clipping) == 2, "the format of clipping threshold should be"
     
     for i, t in enumerate(timepoints):
         adata.obs[f'Day{t}_{param}'] = prediction[i]
