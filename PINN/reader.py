@@ -14,7 +14,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
+    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -38,12 +38,19 @@ class HigDim_AnnDS(AnnDataset):
         
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
-        self.n_timepoint = n_timepoint
         self.deltax_key = deltax_key
-        self.popD['t'] = self.popD['t'][:n_timepoint]
+
+        
+        if isinstance(timepoint_idx, list):
+            pop_idx = timepoint_idx
+        else:
+            pop_idx = slice(None, timepoint_idx)
+
+        self.popD = {k:v[pop_idx] for k,v in self.popD.items()}
+        self.n_timepoint = len(self.popD['t'])
 
         # subset the adata
-        if n_timepoint is not None:
+        if timepoint_idx is not None:
             t_max = self.popD['t'].max()
             cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
             self.adata = self.adata[cbs]
@@ -59,9 +66,9 @@ class HigDim_AnnDS(AnnDataset):
         if deltax_key is None:
             self.deltax = None
         elif deltax_key in self.adata.obsm_keys():
-            self.deltax = self.adata.obsm[deltax_key].copy()
+            self.deltax = self.adata.obsm[deltax_key].copy()[:, :n_dimension]
         elif deltax_key in self.adata.layers():
-            self.deltax = self.adata.layers[deltax_key].copy()
+            self.deltax = self.adata.layers[deltax_key].copy()[:, :n_dimension]
         
 
         if norm_time:
