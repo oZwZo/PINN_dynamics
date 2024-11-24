@@ -611,7 +611,177 @@ class pde_params(pde_params_base):
         
         return np.stack(dilution_flow), np.stack(dirft_flow), np.stack(diffuse_flow)
 
-    
+
+class pde_u_free(pde_params):
+    def __init__(self, channels, step_size, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
+        r"""
+        high dimensional pde without surrogate u
+
+        Arguments:
+        -------------
+        channel : the number of MLP channels of the Behavior function
+        step_size : important, the step size for rk4 odeint
+        [g, v, D]_channel : the number of MLP channels of the Behavior function
+        collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                         which controls the complexity of the pde term.
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        D_penalty : float , default None the weight for penalizing D
+        """
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
+        self.save_hyperparameters()
+        self.b1 = 35 / 384
+        if step_size is None:
+            self.solver = "dopri5"
+        else:
+            self.solver = 'rk4'
+            self.step_size = step_size
+        self.previous_t = None
+        self.step_sizes = []
+
+    def ode_func(self, t, states):
+        """
+        the function used for odeint
+        """
+        u = states[0]
+        s = states[1]
+        duds = states[2]
+        device = s.device
+        t_in = torch.full((s.shape[0],1), t.item()*5).float().to(device)
+
+        # record step size
+        # if self.previous_t is not None:
+        #     step_size = t.item() - self.previous_t
+        #     self.step_sizes.append(step_size)
+        # self.previous_t = t.item()
+
+        with torch.set_grad_enabled(True):
+
+            s.requires_grad_(True)
+            t_in.requires_grad_(True)
+            u.requires_grad_(True)
+            duds.requires_grad_(True)
+        
+            # the first order deviritives of density u to time : ∂u/∂s
+            
+            _, growth, drift, diffuse = self.equation(s, t_in, u, duds)
+
+            dudt = growth - drift + diffuse
+
+            # set ds to zeros to fix cellstates
+            ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
+            
+            duds_by_time = torch.autograd.grad(dudt.sum(), s, create_graph=True)[0] 
+
+        return (dudt, ds, duds_by_time)
+
+    def forward(self, t, states):
+        return self.ode_func(t, states)
+
+    def equation(self, s, t, u, duds) -> tuple:
+        """
+        Apply torch's auto grad to compute the dynamics
+        
+        based on the following equation:
+            ∂u/∂t = ∂/∂s[ D* ∂u/∂s ] - ∂/∂s[ v*u ] + g*u
+        
+        we calcuate the left hand side (lhs) and the right hand side
+        """
+        D = self.D(s,t)
+        v = self.v(s,t)
+        g = self.g(s,t)
+        
+        
+        # the first term:  a second order derivative
+        Du = self.mul(D, duds)   # element-wise 
+        
+        # right hand side
+        if len(Du.shape) == 1: # for one trajectory system
+            # the second order deviritives of density u to cell state : ∂^2u/∂s^2
+            #  ∂/∂s (D*∂u/∂s)
+            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True)[0] 
+
+        else:   # for multi-dimensiona data
+            # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
+            d2Dds2_ls  = []
+            for i in range(v.shape[1]):
+                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                d2Dds2_ls.append(du_dsisi)
+            d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
+        
+        # the second term : ∂/∂s[ v*u ]
+        vu = self.mul(v, u)
+        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] 
+        
+        # right hand side
+        diffuse = d2Dds2.sum(dim=1)
+        drift = dvuds.sum(dim=1)
+        growth = torch.mul(g, u)
+
+        if torch.isnan(diffuse).any():
+            dudss = torch.autograd.grad(duds.sum(), s, create_graph=True)[0] 
+            dDds = torch.autograd.grad(D.sum(), s, create_graph=True)[0] 
+            if torch.isnan(dudss).any():
+                diffuse = self.mul(dDds, duds)
+            else:
+                diffuse = self.mul(D, dudss) + self.mul(dDds, duds)
+                
+        return None, growth, drift, diffuse
+
+    def training_step(self, train_batch, index):        
+        # cellstate, t, t+1, u_t, u_{t+1}
+        s, (t, tp1), (ut, utp1), deltax, du_dDeltax = train_batch
+
+        # divided by 5 to reduce the integration time
+        t0 = t[0].item() / self.time_scale_factor
+        t1 = tp1[0].item() / self.time_scale_factor 
+
+        device = s.device
+
+        
+        # loss 2 : dynamics 
+
+        # init_condition 
+        init_condition = (ut, s, du_dDeltax)
+        step_size = np.around((t1 - t0)/15, decimals=1).item() 
+        step_size = step_size if step_size > 0 else 0.05
+        step_size = min(step_size, 0.4)
+
+        u_int, s_t, du_dDeltax = odeint_adjoint(
+                        self,
+                        y0 = init_condition,
+                        t = torch.tensor([t0, t1]).type(torch.float32).to(device),
+                        atol=self.ode_tol,
+                        rtol=self.ode_tol,
+                        method='rk4',
+                        options={'step_size':self.step_size},
+                        adjoint_options={'norm':'seminorm'},
+                    )
+
+        # boundary u of  the next timepoint
+        utp1_loss = self.loss_fn(u_int[-1], utp1)
+        u_int = nn.functional.relu(u_int)
+
+        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
+
+        D_norm = self.restrict_D(s, t, exp=True)
+        v_loss = self.constrain_v(s,t,deltax)
+
+        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
+
+
+        with torch.no_grad():
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
+        
+        
 
 
 class pde_singlebranch_twotimepoints(pde_params_base):

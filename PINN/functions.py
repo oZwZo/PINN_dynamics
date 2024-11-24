@@ -240,6 +240,37 @@ def compute_highdim_density(adata, cellstate_key='DM_EigenVectors', n_timepoints
 
     return u_ls, density_funs
 
+def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
+    r"""
+    func for multi-process density estimate inside time-point loop
+
+    Input
+    ------
+    cid: cell index , numerical index, not cell barcode
+    cellstate : array [n_cell, n_dim] high-dimensional coordinate (representation) of all cells
+    u_tb : array [n_cell,] , the density of each cell at a timepoint
+    delta_s : [n_dim, ] the small perturbation add to cell state
+    den_fn : callable([n_dim, n_cell]) ,  the density estimation function
+    scaler : density scaler , normlized 
+
+    Return
+    ------
+    the duds : [n_cell, n_dim] , the density chagne along each dimension
+    """
+    cs = cellstate[cid]
+    u_t = u_tb[cid]
+    du_dcs_cell = []
+
+    for i in range(cellstate.shape[1]):
+        ds = np.zeros_like(cs)
+        ds[i] = delta_s[i]
+        s_prime = cs + ds
+        u_prime = den_fn(s_prime.reshape(-1,1)) * scaler
+        dudcs = (u_prime - u_t)/delta_s[i]
+        du_dcs_cell.append(dudcs.reshape(1,1))
+
+    return np.concatenate(du_dcs_cell, axis=1)
+
 def augment_cdf(x, x_a, y):
     """
     This function takes a CDF defined on a grid x and augments it to a finer grid x_a by duplicating the CDF values within intervals defined by x. zeros or ones accordingly were added for where x_a values are outside the range of x
