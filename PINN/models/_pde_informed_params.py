@@ -95,7 +95,7 @@ class pde_params_base(pl.LightningModule):
         """
         sum_diag = 0.
         for i in range(s.shape[1]):
-            sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True)[0].contiguous()[:, i].contiguous()
+            sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True , allow_unused=True)[0] .contiguous()[:, i].contiguous()
 
         return sum_diag.contiguous()
 
@@ -135,11 +135,11 @@ class pde_params_base(pl.LightningModule):
         g = self.g(s,t)
         
         # left : ∂u/∂t
-        dudt = torch.autograd.grad(u.sum(), t, create_graph=True)[0]
+        dudt = torch.autograd.grad(u.sum(), t, create_graph=True , allow_unused=True)[0] 
         
         
         # the first order deviritives of density u to time : ∂u/∂s
-        duds = torch.autograd.grad(u.sum(), s, create_graph=True)[0]
+        duds = torch.autograd.grad(u.sum(), s, create_graph=True , allow_unused=True)[0] 
         
         # the first term:  a second order derivative
         Du = self.mul(D, duds)   # element-wise 
@@ -148,19 +148,19 @@ class pde_params_base(pl.LightningModule):
         if len(Du.shape) == 1: # for one trajectory system
             # the second order deviritives of density u to cell state : ∂^2u/∂s^2
             #  ∂/∂s (D*∂u/∂s)
-            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True)[0] 
+            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True , allow_unused=True)[0]  
 
         else:   # for multi-dimensiona data
             # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
             d2Dds2_ls  = []
             for i in range(v.shape[1]):
-                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True , allow_unused=True)[0] [:, i:i+1]
                 d2Dds2_ls.append(du_dsisi)
             d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
         
         # the second term : ∂/∂s[ v*u ]
         vu = self.mul(v, u)
-        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] 
+        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True , allow_unused=True)[0]  
         
         # right hand side
         diffuse = d2Dds2.sum(dim=1)
@@ -396,14 +396,14 @@ class pde_params(pde_params_base):
         """
         s = states[1]
         device = s.device
-        t_in = torch.full((s.shape[0],1), t.item()*5).float().to(device)
+        t_in = torch.full((s.shape[0],1), t.item()*self.time_scale_factor).float().to(device)
 
         with torch.set_grad_enabled(True):
 
             s.requires_grad_(True)
             t_in.requires_grad_(True)
 
-            u = torch.exp(self.u(s, t_in)) # make sure it is u but not log u
+            # u = torch.exp(self.u(s, t_in)) # make sure it is u but not log u
 
             _, growth, drift, diffuse = self.equation(s, t_in)
 
@@ -461,7 +461,7 @@ class pde_params(pde_params_base):
 
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
 
-        D_norm = self.restrict_D(s, t, exp=True)
+        D_norm = self.restrict_D(s, t, exp=False)
         v_loss = self.constrain_v(s,t,deltax)
 
         total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
@@ -491,17 +491,31 @@ class pde_params(pde_params_base):
 
         # boundary u of the current timepoint
         ub_loss = self.loss_fn(ut.squeeze(), u_pred.squeeze())
+        
+        step_size = np.around((tp1-t)/15, decimals=1).item() 
+        step_size = step_size if step_size > 0 else 0.05
+        step_size = min(step_size, 0.4)
 
         init_condition = (ut, s)
-        u_int, s_t = odeint_adjoint(
-                        self,
-                        y0 = init_condition,
-                        t = torch.tensor([t, tp1]).type(torch.float32).to(device),
-                        atol=self.ode_tol,
-                        rtol=self.ode_tol,
-                        method='dopri5',
-                        adjoint_options={'norm':'seminorm'},
+        # u_int, s_t = odeint_adjoint(
+        #                 self,
+        #                 y0 = init_condition,
+        #                 t = torch.tensor([t, tp1]).type(torch.float32).to(device),
+        #                 atol=self.ode_tol,
+        #                 rtol=self.ode_tol,
+        #                 method='dopri5',
+        #                 adjoint_options={'norm':'seminorm'},
+        #             )
+        u_int, s_t = odeint(
+                        self.ode_func,
+                        init_condition,
+                        torch.tensor([t, tp1]).type(torch.float32).to(device),
+                        atol=1e-5,
+                        rtol=1e-5,
+                        method='midpoint',
+                        options = {'step_size': step_size}
                     )
+
 
         # boundary u of  the next timepoint
         utp1_loss = self.loss_fn(u_int[-1], utp1)
@@ -561,8 +575,7 @@ class pde_params(pde_params_base):
         u_b = train_DS.u_b.reshape(n_timepoint, -1)
         cellstate = torch.from_numpy(train_DS.cellstate).float().requires_grad_()
 
-        
-
+    
         dilution_flow = []
         dirft_flow = []
         diffuse_flow = []
@@ -601,7 +614,7 @@ class pde_params(pde_params_base):
                 v_flow_ls.append( v_flow[1].detach().cpu().numpy() )
                 d_flow_ls.append( d_flow[1].detach().cpu().numpy() )
 
-                torch.cuda.empty_cache()
+                # torch.cuda.empty_cache()
             
             # append for different timepoints
             dilution_flow.append( np.concatenate(g_flow_ls, axis=0) )
@@ -639,7 +652,7 @@ class pde_u_free(pde_params):
             self.solver = "dopri5"
         else:
             self.solver = 'rk4'
-            self.step_size = step_size
+        self.step_size = step_size
         self.previous_t = None
         self.step_sizes = []
 
@@ -675,7 +688,7 @@ class pde_u_free(pde_params):
             # set ds to zeros to fix cellstates
             ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
             
-            duds_by_time = torch.autograd.grad(dudt.sum(), s, create_graph=True)[0] 
+            duds_by_time = torch.autograd.grad(dudt.sum(), s, create_graph=True , allow_unused=True)[0]  
 
         return (dudt, ds, duds_by_time)
 
@@ -703,19 +716,19 @@ class pde_u_free(pde_params):
         if len(Du.shape) == 1: # for one trajectory system
             # the second order deviritives of density u to cell state : ∂^2u/∂s^2
             #  ∂/∂s (D*∂u/∂s)
-            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True)[0] 
+            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True , allow_unused=True)[0]  
 
         else:   # for multi-dimensiona data
             # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
             d2Dds2_ls  = []
             for i in range(v.shape[1]):
-                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True)[0][:, i:i+1]
+                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True , allow_unused=True)[0] [:, i:i+1]
                 d2Dds2_ls.append(du_dsisi)
             d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
         
         # the second term : ∂/∂s[ v*u ]
         vu = self.mul(v, u)
-        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True)[0] 
+        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True , allow_unused=True)[0]  
         
         # right hand side
         diffuse = d2Dds2.sum(dim=1)
@@ -723,8 +736,8 @@ class pde_u_free(pde_params):
         growth = torch.mul(g, u)
 
         if torch.isnan(diffuse).any():
-            dudss = torch.autograd.grad(duds.sum(), s, create_graph=True)[0] 
-            dDds = torch.autograd.grad(D.sum(), s, create_graph=True)[0] 
+            dudss = torch.autograd.grad(duds.sum(), s, create_graph=True , allow_unused=True)[0]  
+            dDds = torch.autograd.grad(D.sum(), s, create_graph=True , allow_unused=True)[0]  
             if torch.isnan(dudss).any():
                 diffuse = self.mul(dDds, duds)
             else:
@@ -747,9 +760,6 @@ class pde_u_free(pde_params):
 
         # init_condition 
         init_condition = (ut, s, du_dDeltax)
-        step_size = np.around((t1 - t0)/15, decimals=1).item() 
-        step_size = step_size if step_size > 0 else 0.05
-        step_size = min(step_size, 0.4)
 
         u_int, s_t, du_dDeltax = odeint_adjoint(
                         self,
@@ -757,7 +767,7 @@ class pde_u_free(pde_params):
                         t = torch.tensor([t0, t1]).type(torch.float32).to(device),
                         atol=self.ode_tol,
                         rtol=self.ode_tol,
-                        method='rk4',
+                        method=self.solver,
                         options={'step_size':self.step_size},
                         adjoint_options={'norm':'seminorm'},
                     )

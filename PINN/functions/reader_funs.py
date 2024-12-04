@@ -2,10 +2,12 @@ import torch
 import numpy as np
 import pandas as pd
 import anndata as ad
+import scanpy as sc
+import decoupler as dc
 from tqdm import tqdm
 from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
-from . import models
+from .. import models
 
 
 def scale_dpt(dpt):
@@ -462,40 +464,20 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     return delta_X, neighbor_ls
 
 
-def make_coord_adata(adata, cellstate_key, v = None):
-    r"""
-    construct adata based on cellstate coodinates from expression matrix based adata
-    the new adata is mainly for visualizing v
-
-    Arguments:
-    -----------
+def generate_pseudobulk(adata, resolution=200, key_added='pseudo_bulk'):
     """
-    # create new adata with DM coordinate as X
-    new_ad = ad.AnnData(
-        X = adata.obsm['DM_EigenVectors_multiscaled'],
-        obs = adata.obs.copy(),
-        var = pd.DataFrame(['DM_%d'%d for d in range(5)]).set_index(0)
+    generate pseudo-bulk (meta-cell) using super-high resolution clustering
+    """
+    sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
+    adata.obs['pseudo_bulk'].nunique()
+    pdata = dc.get_pseudobulk(
+        adata,
+        sample_col='individual',
+        groups_col='cell_type',
+        layer='counts',
+        mode='sum',
+        min_cells=10,
+        min_counts=1000
     )
 
-    # transfer other highdim matrix
-    new_ad.obsp['connectivities'] = adata.obsp['connectivities'].copy()
-    new_ad.obsp['distances'] = adata.obsp['distances'].copy()
-    new_ad.layers['cellstate'] = new_ad.X.copy()
-    new_ad.obsm["X_pca"] = adata.obsm["X_pca"]
-    new_ad.obsm["X_umap"] = adata.obsm["X_umap"]
-    
-    # pop info
-    new_ad.uns = adata.uns.copy()
-    timepoints = adata.uns['pop']['t']
-    n_timepionts = len(timepoints)
-
-    if v is not None:
-        if v.shape[0] == new_ad.shape[0]:
-            # single timepoint
-            new_ad.layers['v'] = v
-        elif v.shape[0] == n_timepionts: 
-            assert len(v.shape) == 3, "please put in the raw v"
-            for i, t in enumerate(timepoints):
-                new_ad.layers[f'Day{t} v'] = v[i]
-
-    return new_ad
+    return pdata

@@ -47,6 +47,8 @@ class HigDim_AnnDS(AnnDataset):
             pop_idx = timepoint_idx
         else:
             pop_idx = slice(None, timepoint_idx)
+        
+        self.pop_idx = pop_idx
 
         self.popD = {k:v[pop_idx] for k,v in self.popD.items()}
         self.n_timepoint = len(self.popD['t'])
@@ -107,10 +109,10 @@ class HigDim_AnnDS(AnnDataset):
             # u_min = np.min(u[u!=0])
             u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
             scaler = self.popD['mean'][tb_idx] / u.sum()
-            u = u * scaler
+            u = u / u.sum()
             u = np.clip(u, a_min=1e-10, a_max=None) 
                     
-            ub_ls.append(u) # TODO: check what are the sum of the density
+            ub_ls.append(u*self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
             cb_ls.append(cb_t)
@@ -249,6 +251,9 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
             self.compute_duds()
         else:
             self.duds = precomputed_duds
+        
+        if self.duds.shape[0] != self.T_b.shape[0]:
+            self.duds = self.duds[self.pop_idx]
 
     def compute_duds(self):
         # computing duds
@@ -265,7 +270,7 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
             # important step : evaluate the density change of perturbing each dimension
             # wrap into a partial function for multi-process
             iter_fn = partial(tl.evaluate_u_ds, cellstate=cellstate, u_tb=u_tb, delta_s=delta_s, den_fn=den_fn, scaler=scaler)
-            du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=10, chunksize=50) # (n_cell, n_dim)
+            du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=5, chunksize=1000) # (n_cell, n_dim)
             dudcs_ls.append( np.concatenate(du_dcs_t, axis=0) )
 
         self.duds = np.stack(dudcs_ls) # (n_time, n_cell, n_dim)
@@ -307,6 +312,7 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
                                 ################################
                                 ## Trajectory Dependent  DS   ##
                                 ################################
+                                
 class SingleBranch_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, max_timespan = 3, replicate_key = 'batch', **kwargs):
         """
