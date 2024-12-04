@@ -152,6 +152,7 @@ gpu_device = args.gpu_devices
 
 trainer = pl.Trainer(
                     #auto_lr_find=True,
+                    enable_progress_bar=False,
                     accelerator=device,
                     # fast_dev_run=True,
                     # gradient_clip_val=0.5,

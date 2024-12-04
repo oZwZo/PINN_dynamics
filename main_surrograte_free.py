@@ -26,23 +26,27 @@ torch.set_float32_matmul_precision('medium')
 parser = argparse.ArgumentParser("Training PINN dynamics on mesh-free high dimensional cellstate, with surrogate-free training scheme")
 parser.add_argument("-D", "--dataset", type=str, required=False, default="HSPC_clu7", help='the name of the dataset, can be found under folder data')
 parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="cellstate", help='the obsm key on which we represent cell and compute density')
-parser.add_argument("-M", "--model", type=str, required=False, default="pde_params", help='the model class, defined in models.py')
+parser.add_argument("-M", "--model", type=str, required=False, default="pde_u_free", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
+parser.add_argument("-L",  "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
 parser.add_argument("--lr", type=float, required=False, default=3e-4, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="CyclicLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
 parser.add_argument("--timepoint_idx", type=str, required=False, default=None, help='the number of time point to train the model')
-parser.add_argument("--batch_size", type=int, required=False, default=200, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--resampling_indensity", type=float, required=False, default=0.5, help='the coefficient to scale the probability of a cell being sampled')
+parser.add_argument("--resampling_rate", type=float, required=False, default=None, help='the rate of resampling over normal indexing')
+parser.add_argument("--batch_size", type=int, required=False, default=128, help='the number of nearby cell state to include within a minibatch')
 parser.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
 parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
-parser.add_argument("--step_size", type=float, required=False, default=0.05, help='the step size used for ode int, default 0.005 for rk4 solver')
+parser.add_argument("--step_size", type=float, required=False, default=None, help='the step size used for ode int, default 0.005 for rk4 solver')
 parser.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
 parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
 parser.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
+
 args = parser.parse_args()
 
 # args = parser.parse_args([
@@ -71,12 +75,14 @@ if args.timepoint_idx is None:
 else:
     timepoint_idx = eval(args.timepoint_idx)
 
-save_path = os.path.join(main_path, 'logs', f"{args.dataset}-{args.cellstate_key}_n{timepoint_idx}", args.model+['','_tsense'][args.time_sensitive])
-if not os.path.exists(os.path.dirname(save_path)):
-    os.mkdir(os.path.dirname(save_path))
 
-if not os.path.exists(save_path):
-    os.mkdir(save_path)
+
+if args.log_name is None:
+    logging_name = f"{args.dataset}-{args.cellstate_key}_n{timepoint_idx}"
+else:
+    logging_name = args.log_name
+save_path = os.path.join(main_path, 'logs', logging_name, args.model+['','_tsense'][args.time_sensitive])
+PINN.tl.make_dir(save_path)
 
 # define model
 model_class = eval(f"models.{args.model}")
@@ -87,8 +93,8 @@ if args.model == "pde_params":
     n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
     max_h = max(channels)
     model_kws = dict(v_channels = [n_dim, max_h, 32, args.n_dimension],
-                    g_channels = [n_dim, max_h,32,1],
-                    D_channels = [n_dim, 32,32,1])
+                    g_channels = [n_dim, max_h, 32, 1],
+                    D_channels = [n_dim, max_h, 32, 1])
 else:
     model_kws = {}
 
@@ -108,7 +114,7 @@ if args.pretrained is not None:
     Pretrain_class = args.pretrained.split("/")[2].replace("_tsense","")
     # Pretrain_class = "u_dt_weight"
     if Pretrain_class == args.model:
-        model = model_class.load_from_checkpoint(args.pretrained)
+        model = model_class.load_from_checkpoint(args.pretrained, map_location='cpu')
     else:
         # then only u is use
         Pretrain_class = eval(f"models.{Pretrain_class}")
@@ -132,6 +138,8 @@ train_DS = reader.Duds_AnnDS(
                             cellstate_key=args.cellstate_key,  #'DM_EigenVector'
                             log_transform=False,
                             norm_time=False,
+                            # resampling_indensity=args.resampling_indensity,
+                            # resampling_rate=args.resampling_rate,
                             deltax_key=args.deltax_key,
                             batchsize=args.batch_size)
 
