@@ -112,7 +112,17 @@ class HigDim_AnnDS(AnnDataset):
         self.compute_density(density_fns)
 
     def compute_density(self, density_fns=None):
-    
+        r"""
+        compute the density for the `self.cellstate`, if density functions not specified then we use the gaussian kde
+
+        Returns
+        -------
+        self.u_b : Tensor, flatten,  (n_time * n_cell)
+        self.t_b : Tensor, flatten,  (n_time * n_cell)
+        self.density_funs : list of callable, [n_time]
+        self.density_P : ndarray, average the total density into probability summing to 1
+        self.s_std : the std of self.cellsate
+        """
         ub_ls = []
         u_scale = []
 
