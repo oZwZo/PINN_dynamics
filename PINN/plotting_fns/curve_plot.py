@@ -7,7 +7,6 @@ import os
 import numpy as np
 import pandas as pd
 import torch 
-from .. import functions  as myfun
 from matplotlib import pyplot as plt
 from matplotlib import cm
 
@@ -210,21 +209,21 @@ def predict_and_vis(model, data_batch, train_DS, curveplot=True, densityplot=Tru
         return u_pred_b, N_theta
 
 
-def evaluate_behavior_for_cell(ad, model, dpt_key='dpt_pseudotime'):
+# def evaluate_behavior_for_cell(ad, model, dpt_key='dpt_pseudotime'):
 
-    dpt = ad.obs[dpt_key].values
-    scaled_dpt = myfun.scale_dpt(dpt)
+#     dpt = ad.obs[dpt_key].values
+#     scaled_dpt = myfun.scale_dpt(dpt)
 
-    cellstate = torch.from_numpy(scaled_dpt)
+#     cellstate = torch.from_numpy(scaled_dpt)
 
-    v_curve  = model.v(cellstate, 0).detach().numpy()
-    g_curve  = model.g(cellstate, 0).detach().numpy()
-    D_curve  = model.D(cellstate, 0).detach().numpy()
+#     v_curve  = model.v(cellstate, 0).detach().numpy()
+#     g_curve  = model.g(cellstate, 0).detach().numpy()
+#     D_curve  = model.D(cellstate, 0).detach().numpy()
 
-    ad.obs['PINN_v'] = v_curve
-    ad.obs['PINN_g'] = g_curve
-    ad.obs['PINN_D'] = D_curve
+#     ad.obs['PINN_v'] = v_curve
+#     ad.obs['PINN_g'] = g_curve
+#     ad.obs['PINN_D'] = D_curve
 
-    # sc.pl.umap(ad, colors=['PINN_v','PINN_g', 'PINN_D'])
+#     # sc.pl.umap(ad, colors=['PINN_v','PINN_g', 'PINN_D'])
 
-    return ad
+#     return ad

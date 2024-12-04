@@ -15,7 +15,7 @@ import matplotlib.animation as animation
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 
-def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, umap_kws={"alpha":0.7, "color_map":'viridis'}):
+def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subplot_kws=None, umap_kws=None):
     r"""
     A very basic functions plotting cellular attribute in the umap and stratified by time
 
@@ -42,9 +42,17 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, umap
     """
 
     n_timepoints = len(timepoints)
-    fig,axs = plt.subplots(1, n_timepoints, figsize=(n_timepoints*2.7,2), gridspec_kw={'wspace':0.4})
+
+    default_plotting_kw = dict(figsize=(n_timepoints*2.7,2), gridspec_kw={'wspace':0.4})
+    if subplot_kws is None:
+        subplot_kws = default_plotting_kw
+    else:
+        subplot_kws = default_plotting_kw.update(subplot_kws)
+    fig,axs = plt.subplots(1, n_timepoints, **subplot_kws)
     # axs = axs.flatten()
     axis_j = 0
+
+    umap_kws = {"alpha":0.7, "color_map":'viridis'}
 
     timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
     for t in timepoints:
@@ -224,3 +232,81 @@ def stack_catplot(x, y, cat, stack, data, palette=sns.color_palette('Reds')):
                bbox_to_anchor=(1.05, 0.8), loc='upper left', borderaxespad=0., ncol=2)
     plt.grid()
     return ax
+
+def celltype_proportion(p_celltype_melt, timepoints, cm_celltype, ct_key, density_key='value', x_lim=None,):
+
+    """
+    cell type proportion 
+    """
+    n_timepoint = len(timepoints)
+    fig_subplot, axs = plt.subplots(1, n_timepoint, figsize=(3*n_timepoint, 6), dpi=300, sharey=True)
+
+    for i, t in enumerate(timepoints):
+        t = str(t)
+        ax=axs[i]
+
+        sns.barplot(data=p_celltype_melt.query("`time` == @t"), 
+                    # color=ct_key, #palette=cm_celltype,
+                    edgecolor='gray', width=0.7,
+                    x = density_key, y=ct_key, hue='data', ax=ax)
+        
+        for bars, hatch, legend_handle in zip(ax.containers, ['', '//'], ax.legend_.legendHandles):
+            for bar, color in zip(bars, cm_celltype.values()):
+                alpha = 1 if hatch == '' else 0.5
+                bar.set_alpha(alpha)
+                bar.set_facecolor(color)
+                bar.set_hatch(hatch)
+            # update the existing legend, use twice the hatching pattern to make it denser
+            legend_handle.set_hatch(hatch + hatch)
+
+        sns.despine() 
+        axs[i].set_xlabel("")
+        axs[i].set_title(t)
+        if i!=0:
+            axs[i].legend([], frameon=False)
+        if x_lim is not None:
+            axs[i].set_xlim(0, x_lim)
+
+    axs[0].set_ylabel("")
+    axs[n_timepoint//2].set_xlabel("cell type proportion")
+
+    return fig_subplot
+
+def make_coord_adata(adata, cellstate_key, n_dimesion, v = None):
+    r"""
+    construct adata based on cellstate coodinates from expression matrix based adata
+    the new adata is mainly for visualizing v
+
+    Arguments:
+    -----------
+    """
+    # create new adata with DM coordinate as X
+    cellstate = adata.obsm[cellstate_key][:,:n_dimesion]
+    new_ad = ad.AnnData(
+        X = cellstate,
+        obs = adata.obs.copy(),
+        var = pd.DataFrame(['DM_%d'%d for d in range(cellstate.shape[1])]).set_index(0)
+    )
+
+    # transfer other highdim matrix
+    new_ad.obsp['connectivities'] = adata.obsp['connectivities'].copy()
+    new_ad.obsp['distances'] = adata.obsp['distances'].copy()
+    new_ad.layers['cellstate'] = new_ad.X.copy()
+    new_ad.obsm["X_pca"] = adata.obsm["X_pca"]
+    new_ad.obsm["X_umap"] = adata.obsm["X_umap"]
+    
+    # pop info
+    new_ad.uns = adata.uns.copy()
+    timepoints = adata.uns['pop']['t']
+    n_timepionts = len(timepoints)
+
+    if v is not None:
+        if v.shape[0] == 1:
+            # single timepoint
+            new_ad.layers['v'] = v
+        elif v.shape[0] > 1: 
+            assert len(v.shape) == 3, "please put in the raw v"
+            for i, t in enumerate(timepoints):
+                new_ad.layers[f'Day{t} v'] = v[i]
+
+    return new_ad

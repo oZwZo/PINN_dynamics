@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import pandas as pd
 from . import functions as tl
+from functools import partial
+from tqdm.contrib.concurrent import process_map
 from scipy.stats import gaussian_kde
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
@@ -14,7 +16,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, n_timepoint=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
+    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -38,12 +40,21 @@ class HigDim_AnnDS(AnnDataset):
         
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
-        self.n_timepoint = n_timepoint
         self.deltax_key = deltax_key
-        self.popD['t'] = self.popD['t'][:n_timepoint]
+
+        
+        if isinstance(timepoint_idx, list):
+            pop_idx = timepoint_idx
+        else:
+            pop_idx = slice(None, timepoint_idx)
+        
+        self.pop_idx = pop_idx
+
+        self.popD = {k:v[pop_idx] for k,v in self.popD.items()}
+        self.n_timepoint = len(self.popD['t'])
 
         # subset the adata
-        if n_timepoint is not None:
+        if timepoint_idx is not None:
             t_max = self.popD['t'].max()
             cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
             self.adata = self.adata[cbs]
@@ -59,9 +70,9 @@ class HigDim_AnnDS(AnnDataset):
         if deltax_key is None:
             self.deltax = None
         elif deltax_key in self.adata.obsm_keys():
-            self.deltax = self.adata.obsm[deltax_key].copy()
+            self.deltax = self.adata.obsm[deltax_key].copy()[:, :n_dimension]
         elif deltax_key in self.adata.layers():
-            self.deltax = self.adata.layers[deltax_key].copy()
+            self.deltax = self.adata.layers[deltax_key].copy()[:, :n_dimension]
         
 
         if norm_time:
@@ -80,6 +91,7 @@ class HigDim_AnnDS(AnnDataset):
         var_ls = []
         density_funs = []
         cb_ls = []
+        u_scale = []
 
         for tb_idx, t_b in enumerate(self.popD['t']):
             
@@ -96,18 +108,21 @@ class HigDim_AnnDS(AnnDataset):
 
             # u_min = np.min(u[u!=0])
             u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
+            scaler = self.popD['mean'][tb_idx] / u.sum()
             u = u / u.sum()
             u = np.clip(u, a_min=1e-10, a_max=None) 
                     
-            ub_ls.append(u * self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
+            ub_ls.append(u*self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
             tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
             var_ls.append(self.popD['var'][tb_idx] /n_exp)
             cb_ls.append(cb_t)
             density_funs.append(density_fun)
+            u_scale.append(scaler)
 
         self.u_b = np.vstack(ub_ls)   # (tb, n_cell)
         self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
         self.density_funs = density_funs
+        self.u_scale = u_scale
 
         self.cb_ls = np.concatenate(cb_ls)
         # self.adata = self.adata[cb_ls].copy()
@@ -207,10 +222,97 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
         return  s, (t, t_p1), (u_t, u_tp1), deltax
+
+
+class Duds_AnnDS(TwoTimpepoint_AnnDS):
+    def __init__(self, *args, precomputed_duds=None, **kwargs):
+        r"""
+        Mannually distrizitize the duds with pre-sampled ∆x as base
+        Each batch returns the cellstates, and their density in two consecutive timepoints and density changes
+        
+        Augments
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+
+        Other params from AnnDataset:
+        --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+        """
+        super().__init__(*args,**kwargs)
+        self.delta_s = self.s_std * 0.01
+
+        if precomputed_duds is None:
+            self.compute_duds()
+        else:
+            self.duds = precomputed_duds
+        
+        if self.duds.shape[0] != self.T_b.shape[0]:
+            self.duds = self.duds[self.pop_idx]
+
+    def compute_duds(self):
+        # computing duds
+        dudcs_ls = []
+        for i_t,t in enumerate(self.T_b):
+
+            den_fn = self.density_funs[i_t]
+            u_tb = self.u_b[i_t].numpy()
+
+            cellstate = self.cellstate.copy()
+            delta_s = self.delta_s.numpy().copy()
+            scaler = self.u_scale[i_t]
+            
+            # important step : evaluate the density change of perturbing each dimension
+            # wrap into a partial function for multi-process
+            iter_fn = partial(tl.evaluate_u_ds, cellstate=cellstate, u_tb=u_tb, delta_s=delta_s, den_fn=den_fn, scaler=scaler)
+            du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=5, chunksize=1000) # (n_cell, n_dim)
+            dudcs_ls.append( np.concatenate(du_dcs_t, axis=0) )
+
+        self.duds = np.stack(dudcs_ls) # (n_time, n_cell, n_dim)
+        assert not np.isinf(self.duds).any(), "infinit duds"
+        assert not np.isnan(self.duds).any(), "Nan in duds"
+
     
+    def __getitem__(self, i):
+        # sample current t
+        i_t = np.random.randint(0, self.n_timepoint-1)  # the i^th timepoint index
+        i_tp1 = i_t + 1                                 # the index of next timepoint
+        
+        # density fun of time it
+        den_fn = self.density_funs[i_t]
+
+        # sample cellstates
+        s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
+        s_ay = self.cellstate[s_index]
+        s = torch.from_numpy(s_ay).float()
+
+        if self.deltax is not None:
+            deltax = torch.from_numpy(self.deltax[s_index]).float()
+        else:
+            raise ValueError("To use Duds AnnDS, 'deltax_key' can not be None")
+
+        # get time
+        t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
+        t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
+        
+
+        # the density of two consecutive 
+        u_t = self.u_b[i_t, s_index]
+        u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
+
+        duds = torch.from_numpy(self.duds[i_t, s_index]).float()
+        return  s, (t, t_p1), (u_t, u_tp1), deltax, duds
+    
+
                                 ################################
                                 ## Trajectory Dependent  DS   ##
                                 ################################
+                                
 class SingleBranch_AnnDS(AnnDataset, MeshGrid):
     def __init__(self, *,n_timepoint=None, n_repeat=10, nearby_cellstate=10, max_timespan = 3, replicate_key = 'batch', **kwargs):
         """
