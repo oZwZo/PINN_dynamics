@@ -1,5 +1,5 @@
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 import os, sys, re
 import numpy as np
 import pandas as pd
@@ -22,12 +22,13 @@ from matplotlib.backends.backend_pdf import PdfPages
 os.chdir("/home/wergillius/Project/PINN_dynamics")
 
 
-# ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_5/checkpoints/epoch=17-total_loss=0.31139943.ckpt"
+ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n[0, 2]/pde_params_tsense/lightning_logs/version_0/checkpoints/epoch=77-total_loss=0.13398665.ckpt"
 # ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
 if __name__ == '__main__':
-    ckpt_path = sys.argv[1]
+    ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
+    
 
-# CHANG THIS !!!!!
+# CHANGE THIS !!!!!
 n_dimension = 5
 ct_key = 'label_man'
 
@@ -53,22 +54,23 @@ model_name = ckpt_path.split("/")[2].replace("_tsense","")
 model_class = eval(f"models.{model_name}")
 
 # MODEL CLASS and define model
-pde_model = model_class.load_from_checkpoint(ckpt_path)
+pde_model = model_class.load_from_checkpoint(ckpt_path, map_location='cuda:1')
 device = pde_model.device
 
 data_name = ckpt_path.split("/")[1].split("-")[0]
 adata = sc.read_h5ad(f"data/{data_name}.h5ad")
 timepoints = adata.uns['pop']['t']
 
+
 cellstate_key = ckpt_path.split("/")[1].split("-")[1].split("_n")[0]
-n_timepoint = int(ckpt_path.split("/")[1].split("-")[1].split("_n")[1])
+timepoint_idx = eval(ckpt_path.split("/")[1].split("-")[1].split("_n")[1])
 
 
 full_adata = sc.read_h5ad(f"data/klein_subset.h5ad")
 base_cellstate = full_adata.obsm[cellstate_key][:,:n_dimension].copy()
 
 # the DS
-DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,  
+DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, timepoint_idx=None,  
                             n_dimension = n_dimension,
                               cellstate_key=cellstate_key,  #'DM_EigenVector'
                               log_transform=False,
@@ -79,7 +81,7 @@ DS_t7 = reader.TwoTimpepoint_AnnDS(AnnData=adata, n_timepoint=n_timepoint,
 
 # adata
 t7_ad = DS_t7.adata.copy()
-u_b = DS_t7.u_b.cpu().numpy().reshape(n_timepoint, -1)
+u_b = DS_t7.u_b.cpu().numpy().reshape(DS_t7.T_b.shape[0], -1)
 cellstate = torch.from_numpy(DS_t7.cellstate).float()
 
 if cellstate.shape[0] > t7_ad.shape[0]:
@@ -114,6 +116,7 @@ with torch.no_grad():
             u_pred = torch.exp(pde_model.u(s_in, t_in))
             u_pred_ls.append(u_pred.detach().cpu().numpy())
 
+n_timepoint =  DS_t7.T_b.shape[0]
 if "u" in dir(pde_model):
     u_pred_b = np.concatenate(u_pred_ls, axis=0).reshape(n_timepoint,-1)
     fig1, axs1 = PINN.pl.params_in_umap(t7_ad, u_b, param='u', cell_of_t=False);
@@ -222,9 +225,67 @@ u_int_all = np.stack(u_int_all)
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
-fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b, param='u b', cell_of_t=True);
-fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all, param='u by integrat', cell_of_t=True);
-fig_int2, axs = PINN.pl.params_in_umap(t7_ad, u_int_all, timepoints=timepoints, param='u by integrat', cell_of_t=False);
+obs_u = np.log10(u_b + 1e-20)
+siml_u = np.log10(u_int_all + 1e-20)
+
+thres = np.quantile(siml_u, [0.05, 0.90])
+siml_u_clipped = np.clip(siml_u, a_min=thres[0], a_max=thres[1])
+
+fig_obs, axs = PINN.pl.params_in_umap(t7_ad, obs_u, param='\nlog10 observed density', cell_of_t=True);
+fig_int1, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped, param='\nlog10 simulated density', cell_of_t=True);
+fig_int2, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped, timepoints=timepoints, param='u by integrat', cell_of_t=False);
+
+
+# long term
+u_int_all = [u_b[0]]
+chunk_size= 500
+t_list = timepoints / 10
+it = 0
+
+u_t_ls = []
+
+for i in range(0, len(cellstate), chunk_size):
+
+    s0 = cellstate[i:i+chunk_size].to(device).requires_grad_()
+    tompos_u0 = torch.from_numpy(u_b[0, i:i+chunk_size]).float().to(device).requires_grad_()
+    init_condition = (tompos_u0, s0)
+
+    step_size = np.around((t1 - t0)/15, decimals=1).item() 
+    step_size = step_size if step_size > 0 else 0.05
+    step_size = min(step_size, 0.4)
+
+    u_t, s_t = odeint(
+                    pde_model,
+                    y0 = init_condition,
+                    t = torch.tensor(t_list).type(torch.float32).to(device),
+                    atol=1e-4,
+                    rtol=1e-4,
+                    method='dopri5',
+                    adjoint_options={'norm':'seminorm'},
+                )
+
+    torch.cuda.empty_cache()
+
+    u_int = torch.nn.functional.relu(u_t)
+    u_t_ls.append(u_int.detach().cpu().numpy())
+    del u_t, s_t
+    torch.cuda.empty_cache()
+
+u_int_all = np.concatenate(u_t_ls, axis=1)
+
+print(u_b.sum(axis=1))
+print(u_int_all.sum(axis=1))
+
+obs_u = np.log10(u_b + 1e-20)
+siml_u = np.log10(u_int_all + 1e-20)
+
+thres = np.quantile(siml_u, [0.05, 0.90])
+siml_u_clipped = np.clip(siml_u, a_min=thres[0], a_max=thres[1])
+
+fig_obs, axs = PINN.pl.params_in_umap(t7_ad, obs_u, param='\nlog10 observed density', cell_of_t=True);
+fig_int1, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped, param='\nlog10 simulated density', cell_of_t=True);
+fig_int2, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped, timepoints=timepoints, param='u by integrat', cell_of_t=False);
+
 
 from scipy.stats import pearsonr
 from scipy.special import kl_div
@@ -368,6 +429,7 @@ if "u" in dir(pde_model):
 savefig(fig_v1, "nabla_v")
 savefig(fig_v2, "v_norm")
 savefig(fig_subplot, "celltype_proportion")
+savefig(fig_int1, 'simulation_cell_T')
 savefig(fig_int2, 'simulation')
 
 
