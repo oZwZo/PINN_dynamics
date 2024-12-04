@@ -212,35 +212,7 @@ def evaluate_2d_mesh_density(D, t_b, x):
     
     return u_t, Nt, n_exp
 
-def compute_highdim_density(adata, cellstate_key='DM_EigenVectors', n_timepoints=None, n_dimension=None, timepoint_key='time', cellstate=None):
-    
-    timepoints = adata.uns['pop']['t'][:n_timepoints]
-    n_timepoints = len(timepoints)
 
-    if cellstate is None:
-        cellstate = adata.obsm[cellstate_key][:, :n_dimension]
-        
-    popD = adata.uns['pop']
-
-    u_ls = []
-    density_funs = []
-
-    for tb_idx, t_b in enumerate(popD['t']):
-            
-        # subset ad_t
-        
-        cb_t = adata.obs.query(f"`{timepoint_key}` == @t_b").index
-        ad_t = adata[cb_t].copy()
-        cellstate_t = ad_t.obsm[cellstate_key][:, :n_dimension]
-
-        density_fun = gaussian_kde(cellstate_t.T)
-        u  = density_fun(cellstate.T)   # evaluate with the entire space
-        n_exp = popD['n_lib'][tb_idx]
-
-        u_ls.append(u)
-        density_funs.append(density_fun)
-
-    return u_ls, density_funs
 
 def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
     r"""
@@ -464,20 +436,107 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     return delta_X, neighbor_ls
 
 
-def generate_pseudobulk(adata, resolution=200, key_added='pseudo_bulk'):
+def make_coord_adata(adata, cellstate_key, n_dimesion, v = None):
+    r"""
+    construct adata based on cellstate coodinates from expression matrix based adata
+    the new adata is mainly for visualizing v
+
+    Arguments:
+    -----------
+    adata : anndata, the source anndata to extract info
+    cellstate_key : which representation to use
+    n_dimesion : the number of first dimeion of cellstate to use
+    v : ndarray of shape [t, n_dim], default none
     """
+    # create new adata with DM coordinate as X
+    cellstate = adata.obsm[cellstate_key][:,:n_dimesion]
+    new_ad = ad.AnnData(
+        X = cellstate,
+        obs = adata.obs.copy(),
+        var = pd.DataFrame(['DM_%d'%d for d in range(cellstate.shape[1])]).set_index(0)
+    )
+
+    # transfer other highdim matrix
+    new_ad.obsp['connectivities'] = adata.obsp['connectivities'].copy()
+    new_ad.obsp['distances'] = adata.obsp['distances'].copy()
+    new_ad.layers['cellstate'] = new_ad.X.copy()
+    new_ad.obsm["X_pca"] = adata.obsm["X_pca"]
+    new_ad.obsm["X_umap"] = adata.obsm["X_umap"]
+    
+    # pop info
+    new_ad.uns = adata.uns.copy()
+    timepoints = adata.uns['pop']['t']
+    n_timepionts = len(timepoints)
+
+    if v is not None:
+        if v.shape[0] == 1:
+            # single timepoint
+            new_ad.layers['v'] = v
+        elif v.shape[0] > 1: 
+            assert len(v.shape) == 3, "please put in the raw v"
+            for i, t in enumerate(timepoints):
+                new_ad.layers[f'Day{t} v'] = v[i]
+
+    return new_ad
+
+def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_added='pseudo_bulk'):
+    r"""
+    Use super-high resolution leiden algorithm to generate pseudo-bulk
+    
+    Augments
+    --------
+    n_pseudobulk : int, defult None -> adata.shape[0] / 20, the number of pseudo bulk to end with
+    pseudobulk_key : str, default 'pseudo_bulk'
+    resolution : int, default None -> 40, the resolution pass to leiden algorithm
+
+    Return
+    --------
+    adata with pseudo bulk key
+    """
+    if n_pseudobulk is None:
+        n_pseudobulk = adata.shape[0] / 20 
+    if resolution is None:
+        resolution = 40 
+
+    if key_added not in adata.obs_keys():
+        sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
+
+    while adata.obs[key_added].nunique() < n_pseudobulk:
+        sc.tl.leiden(adata, resolution=resolution*5, key_added=key_added)
+        
+
+    print(f"getting {adata.obs['pseudo_bulk'].nunique()} pseudobulk with resolution {resolution}")
+
+    return adata
+    
+
+def get_pseudobulk(adata_DM, pseudobulk_key='pseudo_bulk'):
+    r"""
     generate pseudo-bulk (meta-cell) using super-high resolution clustering
+
+    Arguments
+    -----------
+    adata_DM : adata with DM was X
+    pseudobulk_key : str, a obs key to specify the pseudobulk_key to use 
+
+    Return 
+    -----------
+    pdata : anndata with [n_pseudobulk, n_dimension]
+
+    Example
+    -----------
+    >>> adata = super_resolution_pseudobulk(adata, resolution=400, key_added='pseudo_bulk') # leiden clustering
+    >>> adata_DM = make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=10)        # rebase data on low dimension
+    >>> pdata = get_pseudobulk(adata_DM, 'pseudo_bulk')       # generate pseudobulk
+    >>> pdata.shape
     """
-    sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
-    adata.obs['pseudo_bulk'].nunique()
+    
     pdata = dc.get_pseudobulk(
-        adata,
+        adata_DM,
         sample_col='individual',
-        groups_col='cell_type',
-        layer='counts',
-        mode='sum',
-        min_cells=10,
-        min_counts=1000
+        groups_col=pseudobulk_key,
+        mode='mean',
+        min_cells=3,
     )
 
     return pdata

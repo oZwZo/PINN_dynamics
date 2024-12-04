@@ -16,7 +16,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, kde_kws={}, base_cellstate=None, **kwargs):
+    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_fns=None, kde_kws={}, base_cellstate=None, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -41,6 +41,7 @@ class HigDim_AnnDS(AnnDataset):
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
         self.deltax_key = deltax_key
+        self.kde_kws = kde_kws
 
         
         if isinstance(timepoint_idx, list):
@@ -59,22 +60,18 @@ class HigDim_AnnDS(AnnDataset):
             cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
             self.adata = self.adata[cbs]
 
-        # use the cell state key of the entire dataset 
-        # as it tells what are the possible points of the entire cell state space 
-        cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension] if base_cellstate is None else base_cellstate
-        self.cellstate = cellstate
+        # subset the density_fns
+        if density_fns is not None and len(density_fns) != self.n_timepoint:
+            density_fns = density_fns[pop_idx]
 
-        self.s = torch.from_numpy(cellstate).float()
-        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
-
+        # define the delta x for informing v
         if deltax_key is None:
             self.deltax = None
         elif deltax_key in self.adata.obsm_keys():
             self.deltax = self.adata.obsm[deltax_key].copy()[:, :n_dimension]
-        elif deltax_key in self.adata.layers():
+        elif deltax_key in self.adata.layers:
             self.deltax = self.adata.layers[deltax_key].copy()[:, :n_dimension]
         
-
         if norm_time:
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
             T_b = T_b / T_b.max()
@@ -84,26 +81,65 @@ class HigDim_AnnDS(AnnDataset):
         
         ###
         # set up boundary conditions 
-        # compute the densities
         ### 
+        self.cellstate_t_ls = []
+        for tb_idx, t_b in enumerate(self.popD['t']):
+            # subset ad_t
+            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
+            ad_t = self.adata[cb_t].copy()
+            cellstate_t = ad_t.obsm[self.cellstate_key][:, :n_dimension]
+            self.cellstate_t_ls.append(cellstate_t)
+
+        ###
+        #  IMPORTANT !
+        ###
+        # use the cell state key of the entire dataset 
+        # as it tells what are the possible points of the entire cell state space 
+        cellstate = self.adata.obsm[self.cellstate_key][:, :n_dimension] if base_cellstate is None else base_cellstate
+        self.cellstate = cellstate
+        self.s = torch.from_numpy(cellstate).float()
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
+
+        
+        # observeds
+        self.pop_mean = self.popD['mean'] # (tb,)
+        self.T_b = T_b         # (tb,)
+        var_ls = [self.popD['var'][i] / self.popD['n_lib'][i] for i in range(len(T_b))]
+        self.pop_var = np.array(var_ls)  # (tb,)
+        
+        ## compute the densities
+        # pay attention to the definition of self.cellstate
+        self.compute_density(density_fns)
+
+    def compute_density(self, density_fns=None):
+    
         ub_ls = []
-        tb_ls = []
-        var_ls = []
-        density_funs = []
-        cb_ls = []
         u_scale = []
+
+        if density_funs is None:
+            print("Computing density :")
+            print("="*20)
+            print("`density_fns` not specified, use gaussian kde")
+            use_gausian = True
+            density_funs = []
+        else:
+            print("Computing density :")
+            print("="*20)
+            print(f"using pre-defined density fun `{type(density_fns[0])}`")
+            use_gausian = False
 
         for tb_idx, t_b in enumerate(self.popD['t']):
             
             # subset ad_t
             
-            cb_t = self.adata.obs.query(f"`{self.timepoint_key}` == @t_b").index
-            ad_t = self.adata[cb_t].copy()
-            cellstate_t = ad_t.obsm[self.cellstate_key][:, :n_dimension]
+            cellstate_t = self.cellstate_t_ls[tb_idx]
             
             # assess density and return 
-            density_fun = gaussian_kde(cellstate_t.T, **kde_kws)
-            u  = density_fun(cellstate.T)   # evaluate with the entire space
+            if use_gausian:
+                density_fun = gaussian_kde(cellstate_t.T, **self.kde_kws)
+                density_funs.append(density_fun)
+
+            u  = density_funs[tb_idx](self.cellstate.T)   # evaluate with the entire space
             n_exp = self.popD['n_lib'][tb_idx]
 
             # u_min = np.min(u[u!=0])
@@ -113,35 +149,27 @@ class HigDim_AnnDS(AnnDataset):
             u = np.clip(u, a_min=1e-10, a_max=None) 
                     
             ub_ls.append(u*self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
-            tb_ls.append(np.full_like(u, T_b[tb_idx])) # add norm t
-            var_ls.append(self.popD['var'][tb_idx] /n_exp)
-            cb_ls.append(cb_t)
             density_funs.append(density_fun)
             u_scale.append(scaler)
 
         self.u_b = np.vstack(ub_ls)   # (tb, n_cell)
-        self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
         self.density_funs = density_funs
         self.u_scale = u_scale
 
-        self.cb_ls = np.concatenate(cb_ls)
-        # self.adata = self.adata[cb_ls].copy()
-
+        
         # norm_p
         ub_norm = self.u_b.sum(axis=1, keepdims=True)    # (t, n_cell)
-        self.density_P = self.u_b/ub_norm                #TODO:check shape and the values
+        self.density_P = self.u_b/ub_norm               
         scaled_P = self.density_P.flatten() ** self.resampling_indensity
         self.density_P = scaled_P / scaled_P.sum() 
         
         self.u_b = torch.from_numpy(self.u_b.flatten()).float()
 
-        
-        # observeds
-        self.pop_var = np.array(var_ls)  # (tb,)
-        self.pop_mean = self.popD['mean'] # (tb,)
-        self.T_b = T_b         # (tb,)
+        tb_ls = [np.full((self.cellstate.shape[0],), self.T_b[tb_idx]) for tb_idx, t_b in enumerate(self.popD['t'])]
+        self.t_b = torch.from_numpy(np.vstack(tb_ls).flatten()).float()
 
         self.s_std = torch.from_numpy(self.cellstate.std(axis=0)).float()
+
 
     def __len__(self):
         return self.s.shape[0] 
@@ -190,7 +218,6 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         """
         super().__init__(*args,**kwargs)
         self.batchsize = batchsize
-
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
     
     def __len__(self):
@@ -222,6 +249,55 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
         return  s, (t, t_p1), (u_t, u_tp1), deltax
+
+class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
+    def __init__(self, *args, pseudobulk_key='pseudo_bulk', resolution=None, n_pseudobulk=None, **kwargs):
+        r"""
+        Dataset for high dimensional cellstate
+        Each batch returns the cellstates, and their density in two consecutive timepoints
+        
+        Augments
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+
+        Fast Model Augments
+        -------
+        n_pseudobulk : int, defult None -> adata.shape[0] / 20, the number of pseudo bulk to end with
+        pseudobulk_key : str, default 'pseudo_bulk'
+        resolution : int, default None -> 40, the resolution pass to leiden algorithm
+
+        Other params from AnnDataset:
+        --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+        """
+        super().__init__(*args,**kwargs)
+        
+        
+        print("Using FAST mode")
+        print("="*20)
+        print("Definining cell-state space")
+        print("Generating pseudobulk to represent cell-state")
+
+        adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
+        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=10)        # rebase data on low dimension
+        pdata = tl.get_pseudobulk(adata_DM, pseudobulk_key)       # generate pseudobulk
+
+        pdb_cellstate = pdata.X.copy()
+        self.cellstate = pdb_cellstate
+        self.s = torch.from_numpy(self.cellstate).float()
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
+
+        ## compute the densities
+        # pay attention to the definition of self.cellstate
+        self.compute_density(self.density_fns)
+        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
 
 
 class Duds_AnnDS(TwoTimpepoint_AnnDS):
@@ -307,7 +383,63 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
 
         duds = torch.from_numpy(self.duds[i_t, s_index]).float()
         return  s, (t, t_p1), (u_t, u_tp1), deltax, duds
-    
+
+
+class Duds_AnnDS_fastmode(Duds_AnnDS):
+    def __init__(self, *args, n_pseudobulk=None, pseudobulk_key='pseudo_bulk', resolution=None, **kwargs):
+        r"""
+        FAST MODE : Mannually distrizitize the duds with pre-sampled ∆x as base
+        Each batch returns the cellstates, and their density in two consecutive timepoints and density changes
+        
+        Augments
+        --------
+        n_repeat : the output file path from script
+        nearby_cellstate : the number of near (cell state)
+        norm_Time : log-normalize the real timepoint 
+
+        Other params from AnnDataset:
+        --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        
+        Fast Model Augments
+        -------
+        n_pseudobulk : int, defult None -> adata.shape[0] / 20, the number of pseudo bulk to end with
+        pseudobulk_key : str, default 'pseudo_bulk'
+        resolution : int, default None -> 40, the resolution pass to leiden algorithm
+        """
+        super().__init__(*args,**kwargs)
+
+        print("Using FAST mode")
+        print("="*20)
+        print("Definining cell-state space")
+        print("Generating pseudobulk to represent cell-state")
+
+        adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
+        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=10)        # rebase data on low dimension
+        pdata = tl.get_pseudobulk(adata_DM, pseudobulk_key)       # generate pseudobulk
+
+        pdb_cellstate = pdata.X.copy()
+        self.cellstate = pdb_cellstate
+        self.s = torch.from_numpy(self.cellstate).float()
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
+
+        ## compute the densities
+        # pay attention to the definition of self.cellstate
+        self.compute_density(self.density_fns)
+        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
+        self.delta_s = self.s_std * 0.01
+
+        if (self.duds is not None) and (self.duds.shape[0] == self.cellstate.shape[0]):
+            pass  # pre-specify duds is correct
+        else:
+            self.duds = self.compute_duds()
+        
+        if self.duds.shape[0] != self.T_b.shape[0]:
+            self.duds = self.duds[self.pop_idx]
 
                                 ################################
                                 ## Trajectory Dependent  DS   ##
