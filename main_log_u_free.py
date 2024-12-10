@@ -12,7 +12,7 @@ from functools import partial
 import pytorch_lightning as pl
 from pytorch_lightning import callbacks 
 from pytorch_lightning import loggers as pl_loggers
-
+import mellon
 import PINN
 from PINN import models as models
 from PINN import reader 
@@ -26,7 +26,7 @@ torch.set_float32_matmul_precision('medium')
 parser = argparse.ArgumentParser("Training PINN dynamics on mesh-free high dimensional cellstate, with surrogate-free training scheme")
 parser.add_argument("-D", "--dataset", type=str, required=False, default="HSPC_clu7", help='the name of the dataset, can be found under folder data')
 parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="cellstate", help='the obsm key on which we represent cell and compute density')
-parser.add_argument("-M", "--model", type=str, required=False, default="pde_u_free", help='the model class, defined in models.py')
+parser.add_argument("-M", "--model", type=str, required=False, default="logrithmic_pde", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 parser.add_argument("-L",  "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
@@ -99,7 +99,6 @@ if args.model == "pde_params":
                     D_channels = [n_dim, max_h, 32, 1])
 else:
     model_kws = {}
-
 model = model_class(
         channels = channels,
         step_size = args.step_size,
@@ -125,12 +124,16 @@ if args.pretrained is not None:
         state_dict = Pretain_model.model.state_dict()
         model.u.load_state_dict(state_dict)
         
-# detecting pre-computed duds
-duds_path = h5_path.replace(".h5ad", "_surrogate_duds.npy")
-if os.path.exists(duds_path):
-    precomputed_duds = np.load(duds_path)
-else:
-    precomputed_duds = None
+
+# cellstate = adata.obsm[args.cellstate_key][:,:args.n_dimension]
+# log_u, density_fns = PINN.tl.compute_mellon_u(adata, args.cellstate_key, timepoint_key='timepoint_tx_days', n_dimension = args.n_dimension)
+
+predictors = []
+for t in adata.uns['pop']['t']:
+    loaded_predictor = mellon.Predictor.from_json(f"data/tom_pos_mellon_day{t}_predictor.json")
+    predictors.append(loaded_predictor) 
+    
+predictors= np.array(predictors)
 
 DataSet_class = reader.Duds_AnnDS_fastmode if args.fast_mode else reader.Duds_AnnDS
 fast_mode_args = {
@@ -138,15 +141,23 @@ fast_mode_args = {
 }
 fast_mode_args = fast_mode_args if args.fast_mode else {}
 
+# detecting pre-computed duds
+duds_path = h5_path.replace(".h5ad", "_mellon_dloguds.npy")
+if os.path.exists(duds_path):
+    precomputed_duds = np.load(duds_path)
+else:
+    precomputed_duds = None
+
 train_DS = DataSet_class(
                         AnnData=adata, 
                         timepoint_idx=timepoint_idx, 
                         precomputed_duds=precomputed_duds,
                         n_dimension = args.n_dimension,
-                        cellstate_key=args.cellstate_key,  #'DM_EigenVector'
-                        log_transform=False,
+                        cellstate_key=args.cellstate_key,  
+                        log_transform=True, # IMPORTANT  !
                         norm_time=False,
                         deltax_key=args.deltax_key,
+                        density_funs = predictors,
                         batchsize=1,
                         **fast_mode_args
                         )

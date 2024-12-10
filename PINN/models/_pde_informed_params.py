@@ -45,7 +45,7 @@ class pde_params_base(pl.LightningModule):
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
         self.deltax_weight = 0 if deltax_weight is None else deltax_weight
 
-        self.weight_intensity = 0.5 if weight_intensity is None else weight_intensity
+        self.weight_intensity = 1 if weight_intensity is None else weight_intensity
 
         self.GNLL_fn = nn.GaussianNLLLoss()                     # for population loss
         self.KLD_fn = torch.nn.KLDivLoss(reduction="none")
@@ -418,7 +418,7 @@ class pde_params(pde_params_base):
     def training_step(self, train_batch, index):
         
         # cellstate, t, t+1, u_t, u_{t+1}
-        s, (t, tp1), (ut, utp1), deltax = train_batch
+        s, t, tp1, ut, utp1, deltax = train_batch
 
         # divided by 5 to reduce the integration time
         t0 = t[0].item() / self.time_scale_factor
@@ -661,6 +661,7 @@ class pde_u_free(pde_params):
         the function used for odeint
         """
         u = states[0]
+        u = nn.functional.relu(u)
         s = states[1]
         duds = states[2]
         device = s.device
@@ -747,7 +748,7 @@ class pde_u_free(pde_params):
 
     def training_step(self, train_batch, index):        
         # cellstate, t, t+1, u_t, u_{t+1}
-        s, (t, tp1), (ut, utp1), deltax, du_dDeltax = train_batch
+        s, t, tp1, ut, utp1, deltax, du_dDeltax = train_batch
 
         # divided by 5 to reduce the integration time
         t0 = t[0].item() / self.time_scale_factor
@@ -755,7 +756,6 @@ class pde_u_free(pde_params):
 
         device = s.device
 
-        
         # loss 2 : dynamics 
 
         # init_condition 
@@ -778,7 +778,7 @@ class pde_u_free(pde_params):
 
         log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
 
-        D_norm = self.restrict_D(s, t, exp=True)
+        D_norm = self.restrict_D(s, t, exp=False)
         v_loss = self.constrain_v(s,t,deltax)
 
         total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
@@ -791,8 +791,99 @@ class pde_u_free(pde_params):
 
         return total_loss
         
-        
+class logrithmic_pde(pde_u_free):
+    def __init__(self, channels, step_size, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
+        r"""
+        compute ode in logrihmic space ,
 
+        ∂logu/∂t = g 
+                   - ∇v - (∇logu·v) 
+                   + D(∇^2 logu) + D(∇logu·∇D)
+
+        Arguments:
+        -------------
+        channel : the number of MLP channels of the Behavior function
+        step_size : important, the step size for rk4 odeint
+        [g, v, D]_channel : the number of MLP channels of the Behavior function
+        collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                         which controls the complexity of the pde term.
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        D_penalty : float , default None the weight for penalizing D
+        """
+        super().__init__(channels=channels, step_size=step_size, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight, time_scale_factor=time_scale_factor)
+    
+    def equation(self, s, t, logu, dloguds) -> tuple:
+        
+        D = self.D(s,t)
+        v = self.v(s,t)
+        g = self.g(s,t)
+
+        # first-order derivative
+        dvds = torch.autograd.grad(v.sum(), s, create_graph=True , allow_unused=True)[0] 
+        dDds = torch.autograd.grad(D.sum(), s, create_graph=True , allow_unused=True)[0] 
+
+        # second-order derivative
+        dlogudss = torch.autograd.grad(dloguds.sum(), s, create_graph=True , allow_unused=True)[0] 
+        if dlogudss is None:
+            dlogudss = torch.zeros_like(dDds)
+
+        duDds = self.mul(dloguds, dDds)
+        
+        diffusion = self.mul(D, dlogudss) + self.mul(D, duDds)
+        drift = dvds.sum(dim=1) + self.mul(dloguds, v)
+        growth = g
+        
+        return None, growth, drift, diffusion
+    
+    def training_step(self, train_batch, index):        
+        # cellstate, t, t+1, u_t, u_{t+1}
+        s, t, tp1, ut, utp1, deltax, du_dDeltax = train_batch
+
+        # divided by 5 to reduce the integration time
+        t0 = t[0].item() / self.time_scale_factor
+        t1 = tp1[0].item() / self.time_scale_factor 
+
+        device = s.device
+
+        # loss 2 : dynamics 
+
+        # init_condition 
+        init_condition = (ut, s, du_dDeltax)
+
+        u_int, s_t, du_dDeltax = odeint_adjoint(
+                        self,
+                        y0 = init_condition,
+                        t = torch.tensor([t0, t1]).type(torch.float32).to(device),
+                        atol=self.ode_tol,
+                        rtol=self.ode_tol,
+                        method=self.solver,
+                        options={'step_size':self.step_size},
+                        adjoint_options={'norm':'seminorm'},
+                    )
+
+        # boundary u of  the next timepoint
+        utp1_loss = self.loss_fn(u_int[-1], utp1)
+        u_int = nn.functional.relu(u_int)
+
+        log_utp1_loss = self.loss_fn(utp1, u_int[-1])
+
+        D_norm = self.restrict_D(s, t, exp=False)
+        v_loss = self.constrain_v(s,t,deltax)
+
+        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
+
+
+        with torch.no_grad():
+            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
+            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
 
 class pde_singlebranch_twotimepoints(pde_params_base):
     def __init__(self, n_grid=300, channels=11, lr=3e-4,  D_penalty = None, weight_intensity=None, ode_tol=1e-4):

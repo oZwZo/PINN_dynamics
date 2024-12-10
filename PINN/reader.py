@@ -16,7 +16,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_fns=None, kde_kws={}, base_cellstate=None, **kwargs):
+    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, base_cellstate=None, **kwargs):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -60,9 +60,9 @@ class HigDim_AnnDS(AnnDataset):
             cbs = self.adata.obs.query(f"`{self.timepoint_key}` <= @t_max").index
             self.adata = self.adata[cbs]
 
-        # subset the density_fns
-        if density_fns is not None and len(density_fns) != self.n_timepoint:
-            density_fns = density_fns[pop_idx]
+        # subset the density_funs
+        if density_funs is not None and len(density_funs) != self.n_timepoint:
+            density_funs = density_funs[pop_idx]
 
         # define the delta x for informing v
         if deltax_key is None:
@@ -109,9 +109,9 @@ class HigDim_AnnDS(AnnDataset):
         
         ## compute the densities
         # pay attention to the definition of self.cellstate
-        self.compute_density(density_fns)
+        self.compute_density(density_funs)
 
-    def compute_density(self, density_fns=None):
+    def compute_density(self, density_funs=None):
         r"""
         compute the density for the `self.cellstate`, if density functions not specified then we use the gaussian kde
 
@@ -129,13 +129,13 @@ class HigDim_AnnDS(AnnDataset):
         if density_funs is None:
             print("Computing density :")
             print("="*20)
-            print("`density_fns` not specified, use gaussian kde")
+            print("`density_funs` not specified, use gaussian kde")
             use_gausian = True
             density_funs = []
         else:
             print("Computing density :")
             print("="*20)
-            print(f"using pre-defined density fun `{type(density_fns[0])}`")
+            print(f"using pre-defined density fun `{type(density_funs[0])}`")
             use_gausian = False
 
         for tb_idx, t_b in enumerate(self.popD['t']):
@@ -149,17 +149,26 @@ class HigDim_AnnDS(AnnDataset):
                 density_fun = gaussian_kde(cellstate_t.T, **self.kde_kws)
                 density_funs.append(density_fun)
 
-            u  = density_funs[tb_idx](self.cellstate.T)   # evaluate with the entire space
+            try:
+                u  = density_funs[tb_idx](self.cellstate)   # evaluate with the entire space
+            except:
+                u  = density_funs[tb_idx](self.cellstate.T)   # evaluate with the entire space
             n_exp = self.popD['n_lib'][tb_idx]
 
             # u_min = np.min(u[u!=0])
-            u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
-            scaler = self.popD['mean'][tb_idx] / u.sum()
-            u = u / u.sum()
-            u = np.clip(u, a_min=1e-10, a_max=None) 
-                    
-            ub_ls.append(u*self.popD['mean'][tb_idx]) # TODO: check what are the sum of the density
-            density_funs.append(density_fun)
+            if self.log_transform:
+                u_sum = np.exp(u).sum()
+                scaler = np.log(self.popD['mean'][tb_idx] / u_sum)
+                u = u - np.log(u_sum)
+                ub_ls.append(u + np.log(self.popD['mean'][tb_idx]))
+            else:
+                u_sum = u.sum()
+                u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
+                scaler = self.popD['mean'][tb_idx] / u_sum
+                u = u / u.sum()
+                # u = np.clip(u, a_min=1e-10, a_max=None) 
+                ub_ls.append(u*self.popD['mean'][tb_idx])        
+            
             u_scale.append(scaler)
 
         self.u_b = np.vstack(ub_ls)   # (tb, n_cell)
@@ -258,7 +267,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        return  s, (t, t_p1), (u_t, u_tp1), deltax
+        return  s, t, t_p1, u_t, u_tp1, deltax
 
 class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
     def __init__(self, *args, pseudobulk_key='pseudo_bulk', resolution=None, n_pseudobulk=None, **kwargs):
@@ -305,7 +314,7 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
 
         ## compute the densities
         # pay attention to the definition of self.cellstate
-        self.compute_density(self.density_fns)
+        self.compute_density(self.density_funs)
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
 
 
@@ -355,9 +364,26 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
             
             # important step : evaluate the density change of perturbing each dimension
             # wrap into a partial function for multi-process
-            iter_fn = partial(tl.evaluate_u_ds, cellstate=cellstate, u_tb=u_tb, delta_s=delta_s, den_fn=den_fn, scaler=scaler)
-            du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=5, chunksize=1000) # (n_cell, n_dim)
-            dudcs_ls.append( np.concatenate(du_dcs_t, axis=0) )
+            # iter_fn = partial(tl.evaluate_u_ds, cellstate=cellstate, u_tb=u_tb, delta_s=delta_s, den_fn=den_fn, scaler=scaler)
+            # du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=5, chunksize=1000) # (n_cell, n_dim)
+            if 'gradient' in dir(den_fn):
+                du_dcs_t = den_fn.gradient(cellstate)
+            else:
+                du_dcs_t = []
+                for dim in range(cellstate.shape[1]):
+                    dcs = np.zeros_like(cellstate)
+                    dcs[:,dim] = np.full((dcs.shape[0],), self.delta_s[dim])
+                    s_prime = cellstate + dcs
+
+                    dudcs_dim = (den_fn(s_prime.T) - den_fn(cellstate.T)) / self.delta_s[dim]
+                    du_dcs_t.append(dudcs_dim)
+                du_dcs_t = np.stack(du_dcs_t).T
+
+            if self.log_transform:
+                du_dcs_t += scaler
+            else:
+                du_dcs_t *= scaler
+            dudcs_ls.append( du_dcs_t )
 
         self.duds = np.stack(dudcs_ls) # (n_time, n_cell, n_dim)
         assert not np.isinf(self.duds).any(), "infinit duds"
@@ -392,7 +418,7 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
         duds = torch.from_numpy(self.duds[i_t, s_index]).float()
-        return  s, (t, t_p1), (u_t, u_tp1), deltax, duds
+        return  s, t, t_p1, u_t, u_tp1, deltax, duds
 
 
 class Duds_AnnDS_fastmode(Duds_AnnDS):
@@ -428,7 +454,8 @@ class Duds_AnnDS_fastmode(Duds_AnnDS):
         print("Generating pseudobulk to represent cell-state")
 
         adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
-        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=10)        # rebase data on low dimension
+        self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
+        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=self.n_dimension)        # rebase data on low dimension
         pdata = tl.get_pseudobulk(adata_DM, pseudobulk_key)       # generate pseudobulk
 
         pdb_cellstate = pdata.X.copy()
@@ -438,7 +465,7 @@ class Duds_AnnDS_fastmode(Duds_AnnDS):
 
         ## compute the densities
         # pay attention to the definition of self.cellstate
-        self.compute_density(self.density_fns)
+        self.compute_density(self.density_funs)
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
 
         self.delta_s = self.s_std * 0.01
@@ -446,7 +473,7 @@ class Duds_AnnDS_fastmode(Duds_AnnDS):
         if (self.duds is not None) and (self.duds.shape[0] == self.cellstate.shape[0]):
             pass  # pre-specify duds is correct
         else:
-            self.duds = self.compute_duds()
+            self.compute_duds()
         
         if self.duds.shape[0] != self.T_b.shape[0]:
             self.duds = self.duds[self.pop_idx]
@@ -639,7 +666,7 @@ class TwoTimepoint_MeshGrid(MeshGrid_Resample):
         u_t = torch.from_numpy(self.u_b[i_t, [i]]).float()
         u_tp1 = torch.from_numpy(self.u_b[i_tp1, [i]]).float()  # density of the t plus 1
 
-        return  s, (t, t_p1), (u_t, u_tp1)
+        return  s, t, t_p1, u_t, u_tp1
 
 class AllTimepoint_MeshGrid(MeshGrid_Resample):
     def __init__(self, *args, **kwargs):

@@ -39,7 +39,9 @@ def pred_to_nday(x, n_timepoint=5, n_dim=5):
         nday = nday.reshape(n_timepoint, -1, n_dim)
     return nday
 
-
+######
+#     Gaussian Density
+######
 
 def compute_guassian_u(Cellstate_ay, dimension=10):
     r"""
@@ -212,7 +214,35 @@ def evaluate_2d_mesh_density(D, t_b, x):
     
     return u_t, Nt, n_exp
 
+#####
+#    mellon density
+#####
 
+def compute_mellon_u(adata, cellstate_key, timepoint_key, n_dimension):
+    try:
+        model_t = mellon.DensityEstimator()
+    except:
+        import mellon
+    
+    adata_tb = adata.obs[timepoint_key]          # pd.Series
+    X = adata.obsm[cellstate_key][:, :n_dimension]        # np.values
+    
+    density_funs = []
+    log_u = []
+
+    for i, t in enumerate(sorted(adata_tb.unique())):
+        print('estimating density for time ', t)
+        cb_t = adata.obs.query(f"`{timepoint_key}` == @t").index
+        cs_t = adata[cb_t].obsm[cellstate_key][:, :n_dimension]   # cellstate t
+
+        model_t = mellon.DensityEstimator()
+        model_t.fit(cs_t)
+
+        log_density = model_t.predict(X)
+        
+        log_u.append(log_density)
+        density_funs.append(model_t)
+    return np.stack(log_u), density_funs
 
 def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
     r"""
@@ -231,8 +261,8 @@ def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
     ------
     the duds : [n_cell, n_dim] , the density chagne along each dimension
     """
-    cs = cellstate[cid]
-    u_t = u_tb[cid]
+    # cs = cellstate[cid]
+    # u_t = u_tb[cid]
     du_dcs_cell = []
 
     for i in range(cellstate.shape[1]):
@@ -240,6 +270,7 @@ def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
         ds[i] = delta_s[i]
         s_prime = cs + ds
         u_prime = den_fn(s_prime.reshape(-1,1)) * scaler
+        u_t = den_fn(cs.reshape(-1,1)) * scaler
         dudcs = (u_prime - u_t)/delta_s[i]
         du_dcs_cell.append(dudcs.reshape(1,1))
 
@@ -496,16 +527,21 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     if n_pseudobulk is None:
         n_pseudobulk = adata.shape[0] / 20 
     if resolution is None:
-        resolution = 40 
+        resolution = 200 
+    
+    magnitude_of = lambda x: int(np.log10(x))
 
     if key_added not in adata.obs_keys():
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
+        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=42)
 
-    while adata.obs[key_added].nunique() < n_pseudobulk:
-        sc.tl.leiden(adata, resolution=resolution*5, key_added=key_added)
+    while magnitude_of(adata.obs[key_added].nunique()) < magnitude_of(n_pseudobulk):
+        resolution=resolution*5
+        sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
         
 
     print(f"getting {adata.obs['pseudo_bulk'].nunique()} pseudobulk with resolution {resolution}")
+
+    adata.uns[f'{key_added}_settings'] = {'resolution':resolution, 'n_pseudobulk':n_pseudobulk}
 
     return adata
     
@@ -530,13 +566,14 @@ def get_pseudobulk(adata_DM, pseudobulk_key='pseudo_bulk'):
     >>> pdata = get_pseudobulk(adata_DM, 'pseudo_bulk')       # generate pseudobulk
     >>> pdata.shape
     """
-    
+    adata_DM.obs = adata_DM.obs.dropna(axis=1, how='any')
     pdata = dc.get_pseudobulk(
         adata_DM,
-        sample_col='individual',
-        groups_col=pseudobulk_key,
+        sample_col=pseudobulk_key,
+        groups_col=None,
         mode='mean',
         min_cells=3,
+        min_counts=0,
     )
 
     return pdata

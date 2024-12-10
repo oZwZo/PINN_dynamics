@@ -29,6 +29,7 @@ class AnnDataset(Dataset):
         self.adata = AnnData
         self.cellstate_key = cellstate_key
         self.timepoint_key = timepoint_key
+        self.log_transform = log_transform
 
         # check cell state
         assert cellstate_key in AnnData.obsm_keys(),  f'cellstate key `{cellstate_key}` not found in adata'
@@ -48,14 +49,14 @@ class AnnDataset(Dataset):
         else:
             self.popD = pop_dict
 
-        if log_transform:
-            mu = np.array(self.popD['mean'])
-            self.popD['mean'] = np.log(mu)
-            self.popD['var'] = self.popD['var']/ mu
-        else:
-            N0 = self.popD['mean'][0]
-            self.popD['mean'] = self.popD['mean'] / N0
-            self.popD['var'] = self.popD['var']/ N0
+        # if log_transform:
+        #     mu = np.array(self.popD['mean'])
+        #     self.popD['mean'] = np.log(mu)
+        #     self.popD['var'] = self.popD['var']/ mu
+        # else:
+        N0 = self.popD['mean'][0]
+        self.popD['mean'] = self.popD['mean'] / N0
+        self.popD['var'] = self.popD['var']/ N0
 
         if norm_time == 'log':
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
