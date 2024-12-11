@@ -72,7 +72,7 @@ def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None):
 
     return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
 
-def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_span=1, timepoints=None, cellstate=None):
+def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_span=1, timepoints=None, cellstate=None, return_all=False):
     r"""
     simulate density for each cells for any two consecutive timepoints
 
@@ -82,7 +82,8 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
     DataSet : sub-class of `PINN.readers.HighdimAnnDS` 
     timepoint_idx : list of index , default the full timepoints defined in DataSet
     time_span : int , how many step of the timepoint index
-
+    return_all : bool, if return the other output
+    
     Return:
     ---------
     u_int_all : np.ndarry [n_timepoints, n_cells]
@@ -103,13 +104,14 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
     duds = DataSet.duds.copy()
     u_b = DataSet.u_b.cpu().numpy().reshape(DataSet.T_b.shape[0], -1)
 
-    u_int_all_ls = []
+
+    all_output = []
     chunk_size= 1000
     t_list = timepoints/ timepoints[0] / pde_model.time_scale_factor
 
     for it, itp1 in tqdm(zip(timepoint_idx[:-1], timepoint_idx[1:])):
 
-        u_t_ls = []
+        out_t = []
 
         for i in range(0, len(cellstate), chunk_size):
 
@@ -117,7 +119,7 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
             tompos_u0 = torch.from_numpy(u_b[it, i:i+chunk_size]).float().to(device).requires_grad_()
             duds_0 = torch.from_numpy(duds[it, i:i+chunk_size, :]).float().to(device).requires_grad_()
             
-            init_condition = (tompos_u0, s0, duds_0) if model_name == 'pde_u_free' else (tompos_u0, s0)
+            init_condition = (tompos_u0, s0) if model_name == 'pde_params' else (tompos_u0, s0, duds_0)
 
             int_out = odeint(
                             pde_model,
@@ -130,20 +132,42 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
                         )
 
             u_t = int_out[0]
-            s_t = int_out[1]
 
-            u_int = torch.nn.functional.relu(u_t[1:])
-            u_t_ls.append(u_int.detach().cpu().numpy())
+            int_out[0] = torch.nn.functional.relu(u_t[1:])
+
             del u_t, s_t
+
+            if return_all:
+                if len(out_t) == 0:
+                    out_t = [[] for i in range(len(int_out)) ]
+
+                for i, o in enumerate(int_out):
+                    # add the i_th output
+                    out_t[i].append(o.detach().cpu().numpy())
+
             # torch.cuda.empty_cache()
+
+        # concate at batch - wise
+        if return_all:
+            for i, ith_out in enumerate(out_t):
+                conate_axis = 1 if len(ith_out[0].shape) > 0 else 0 # 1 is sample wise if more than 1 evaluation timepoint
+                ith_concate = np.concatenate(ith_out, axis=conate_axis)
+                out_t[i] = ith_concate
 
         u_int = np.concatenate(u_t_ls, axis=len(u_int.shape)-1)
         
         u_int_all_ls.append(u_int)
+        if return_all:
+            all_output.append(out_t)
+            
         # it+=1
 
-    u_int_ay = np.stack(u_int_all_ls) if len(u_int.shape)==1 else np.concatenate(u_int_all_ls, axis=0)
-    u_int_all = np.concatenate([u_b[[0]], u_int_ay], axis=0)
+    # conate at timepoint-wise
 
-    return u_int_all
+    all_output
+
+    if return_all:
+        return all_output
+    else:
+        return u_int_all
 

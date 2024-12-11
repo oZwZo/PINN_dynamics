@@ -661,7 +661,8 @@ class pde_u_free(pde_params):
         the function used for odeint
         """
         u = states[0]
-        u = nn.functional.relu(u)
+        if not self.log_transform:
+            u = nn.functional.relu(u)
         s = states[1]
         duds = states[2]
         device = s.device
@@ -747,8 +748,12 @@ class pde_u_free(pde_params):
         return None, growth, drift, diffuse
 
     def training_step(self, train_batch, index):        
-        # cellstate, t, t+1, u_t, u_{t+1}
+        # cellstate : [b, cellstate_dim], t, t+1, u_t, u_{t+1} : [b,], duds : [b, 2, cellstate_dim]
         s, t, tp1, ut, utp1, deltax, du_dDeltax = train_batch
+
+        # if the input data contains any negative values
+        # then 
+        self.log_transform = torch.any(ut<0).item()
 
         # divided by 5 to reduce the integration time
         t0 = t[0].item() / self.time_scale_factor
@@ -759,9 +764,9 @@ class pde_u_free(pde_params):
         # loss 2 : dynamics 
 
         # init_condition 
-        init_condition = (ut, s, du_dDeltax)
+        init_condition = (ut, s, du_dDeltax[:,0])
 
-        u_int, s_t, du_dDeltax = odeint_adjoint(
+        u_int, s_t, duds = odeint_adjoint(
                         self,
                         y0 = init_condition,
                         t = torch.tensor([t0, t1]).type(torch.float32).to(device),
@@ -774,14 +779,22 @@ class pde_u_free(pde_params):
 
         # boundary u of  the next timepoint
         utp1_loss = self.loss_fn(u_int[-1], utp1)
-        u_int = nn.functional.relu(u_int)
+        
+        if not self.log_transform:
+            u_int = nn.functional.relu(u_int)
+            tp1_intput = torch.log(utp1+1e-30)
+            tp1_sim_out = torch.log(u_int[-1]+1e-30)
+        else:
+            tp1_sim_out = u_int[-1]
+            tp1_intput = utp1
 
-        log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
+        log_utp1_loss = self.loss_fn(tp1_intput, tp1_sim_out)
 
         D_norm = self.restrict_D(s, t, exp=False)
-        v_loss = self.constrain_v(s,t,deltax)
+        v_loss = self.constrain_v(s, t, deltax)
+        duds_loss = -1 * nn.functional.cosine_similarity(duds[-1],du_dDeltax[:,-1])
 
-        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
+        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + duds_loss.mean()
 
 
         with torch.no_grad():
@@ -830,60 +843,28 @@ class logrithmic_pde(pde_u_free):
         # second-order derivative
         dlogudss = torch.autograd.grad(dloguds.sum(), s, create_graph=True , allow_unused=True)[0] 
         if dlogudss is None:
-            dlogudss = torch.zeros_like(dDds)
+            dlogudss = dloguds # becomes a scaler
 
         duDds = self.mul(dloguds, dDds)
         
         diffusion = self.mul(D, dlogudss) + self.mul(D, duDds)
+        
+
+        # drift : ∇v + (∇logu·v) 
         drift = dvds.sum(dim=1) + self.mul(dloguds, v)
         growth = g
+
+        # # diffusion : 1/u·∇(D·u·∇logu)
+        # u = torch.exp(logu)
+        # Du = self.mul(D, u)
+        # Dudloguds = self.mul(Du, dloguds)
+
+        # # second order derivatives
+        # ddDdss = torch.autograd.grad(Dudloguds.sum(), s, create_graph=True , allow_unused=True)[0].sum(dim=1)
+        # diffusion = torch.div(ddDdss, u)
         
         return None, growth, drift, diffusion
     
-    def training_step(self, train_batch, index):        
-        # cellstate, t, t+1, u_t, u_{t+1}
-        s, t, tp1, ut, utp1, deltax, du_dDeltax = train_batch
-
-        # divided by 5 to reduce the integration time
-        t0 = t[0].item() / self.time_scale_factor
-        t1 = tp1[0].item() / self.time_scale_factor 
-
-        device = s.device
-
-        # loss 2 : dynamics 
-
-        # init_condition 
-        init_condition = (ut, s, du_dDeltax)
-
-        u_int, s_t, du_dDeltax = odeint_adjoint(
-                        self,
-                        y0 = init_condition,
-                        t = torch.tensor([t0, t1]).type(torch.float32).to(device),
-                        atol=self.ode_tol,
-                        rtol=self.ode_tol,
-                        method=self.solver,
-                        options={'step_size':self.step_size},
-                        adjoint_options={'norm':'seminorm'},
-                    )
-
-        # boundary u of  the next timepoint
-        utp1_loss = self.loss_fn(u_int[-1], utp1)
-        u_int = nn.functional.relu(u_int)
-
-        log_utp1_loss = self.loss_fn(utp1, u_int[-1])
-
-        D_norm = self.restrict_D(s, t, exp=False)
-        v_loss = self.constrain_v(s,t,deltax)
-
-        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
-
-
-        with torch.no_grad():
-            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
-            self.log("log_integrat_loss", log_utp1_loss.item(), on_epoch=True)
-            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
-
-        return total_loss
 
 class pde_singlebranch_twotimepoints(pde_params_base):
     def __init__(self, n_grid=300, channels=11, lr=3e-4,  D_penalty = None, weight_intensity=None, ode_tol=1e-4):

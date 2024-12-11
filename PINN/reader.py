@@ -157,6 +157,8 @@ class HigDim_AnnDS(AnnDataset):
 
             # u_min = np.min(u[u!=0])
             if self.log_transform:
+                threshold = np.quantile(u, q=[1e-3,1-1e-3])
+                u = np.clip(u, *threshold)
                 u_sum = np.exp(u).sum()
                 scaler = np.log(self.popD['mean'][tb_idx] / u_sum)
                 u = u - np.log(u_sum)
@@ -417,7 +419,7 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        duds = torch.from_numpy(self.duds[i_t, s_index]).float()
+        duds = torch.from_numpy(self.duds[None, [i_t, i_tp1], s_index]).float()
         return  s, t, t_p1, u_t, u_tp1, deltax, duds
 
 
