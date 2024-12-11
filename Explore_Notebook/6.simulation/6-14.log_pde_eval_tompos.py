@@ -1,5 +1,5 @@
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 import os, sys, re
 import numpy as np
 import pandas as pd
@@ -7,12 +7,13 @@ import scanpy as sc
 import torch
 import time
 import PINN
+from functools import partial
 from PINN import reader, models, pl, tl
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from TorchDiffEqPack import odesolve
 from torchdiffeq import odeint_adjoint as odeint
-
+import mellon
 import matplotlib as mpl
 import seaborn as sns
 from matplotlib.patches import Patch
@@ -26,8 +27,8 @@ TM2=[0,1,2,3,5]
 
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/tom_pos-DM_scaled_n[0, 1, 2, 3, 4, 6, 8]/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=121-total_loss=8.91327095.ckpt"
-# ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
+ckpt_path = "logs/log_u_model_nTM2/logrithmic_pde_tsense/lightning_logs/version_0/checkpoints/epoch=56-total_loss=112.97620392.ckpt"
+
 
 if __name__ == '__main__':
     ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
@@ -36,7 +37,7 @@ if __name__ == '__main__':
 data_name = 'tom_pos'
 cellstate_key = 'DM_scaled'
 timepoint_key = 'timepoint_tx_days'
-n_dimension = 10 
+n_dimension = 30 
 ct_key = 'anno_man'
 cuda = "cuda:%d"%cuda if cuda.isdigit() else cuda
 
@@ -80,25 +81,47 @@ else:
         timepoint_idx = None
 
 # detecting pre-computed duds
-duds_path = f"data/{data_name}_duds.npy"
+duds_path = f"data/{data_name}_mellon_dloguds.npy"
 if os.path.exists(duds_path):
     precomputed_duds = np.load(duds_path)
 else:
     precomputed_duds = None
 
+
+# time-continous mellon
+if not os.path.exists(f"data/tom_pos_mellon_timecontinuous_predictor.json"):
+    X = adata.obsm[cellstate_key]
+    X_times = adata.obs[timepoint_key].astype(int).apply(np.log)
+    ls_time_estimate = 1.5 * np.mean(np.diff(np.log(timepoints)))
+    t_est = mellon.TimeSensitiveDensityEstimator(d=2, ls_time=ls_time_estimate)
+    # Fit the estimator to the data
+    t_est.fit(X, X_times)
+    t_est.predict.to_json(f"data/tom_pos_mellon_timecontinuous_predictor.json") 
+
+t_pred = mellon.Predictor.from_json(f"data/tom_pos_mellon_timecontinuous_predictor.json")
+
+# u_time_model = np.stack([t_pred(X, np.full(X_times.shape, np.log(t))) for t in timepoints])
+# threshold = np.quantile(u_time_model, q=[1e-3,1-1e-3], axis=1).T
+# u_time_model_clip = np.stack([np.clip(u,*threshold[i]) for i,u in enumerate(u_time_model)])
+# dloguds_timemodel = np.stack([t_pred.gradient(X, np.full(X_times.shape, np.log(t))) for t in timepoints])
+# np.save(f"data/{data_name}_mellon_dloguds.npy", dloguds_timemodel)
+
 # test mellon
-log_u, density_fns = tl.compute_mellon_u(adata, cellstate_key, timepoint_key='timepoint_tx_days', n_dimension = n_dimension)
-predictors = [lambda x : np.exp(model.predict(x)) for model in density_fns]
-PINN.pl.params_in_umap(adata, log_u, adata.uns['pop']['t'], param='\nlog u mellon', cell_of_t=False);
+predictors = []
+for i, t in enumerate(adata.uns['pop']['t']):
+    # den_fun = lambda x : np.clip(t_est.predict(x, np.full((x.shape[0],), np.log(t))), *threshold[i])
+    den_fun = partial(t_pred, time = np.log(t)) 
+    predictors.append(den_fun) 
+predictors= np.array(predictors)
 
 DS_full = reader.Duds_AnnDS(
                             AnnData=adata, 
-                            timepoint_idx=5, 
+                            timepoint_idx=None, 
                             precomputed_duds=precomputed_duds,
                             timepoint_key = timepoint_key,
                             n_dimension = n_dimension,
                             cellstate_key=cellstate_key,  #'DM_EigenVector'
-                            log_transform=False,
+                            log_transform=True,
                             norm_time=False,
                             deltax_key="Delta_DM",
                             density_funs = predictors,
@@ -108,9 +131,14 @@ DS_full = reader.Duds_AnnDS(
 t7_ad = DS_full.adata.copy()
 duds = DS_full.duds.copy()
 u_b = DS_full.u_b.cpu().numpy().reshape(DS_full.T_b.shape[0], -1)
+u_b_raw = np.stack([predict(DS_full.cellstate) for predict in predictors])
 cellstate = torch.from_numpy(DS_full.cellstate).float()
 timepoint_label = DS_full.popD['t']
 
+PINN.pl.params_in_umap(adata, u_b, param='DS log u', cell_of_t=False)
+
+retest_u_clip = np.stack([p(DS_full.cellstate) for p in predictors])
+PINN.pl.params_in_umap(adata, retest_u_clip, cell_of_t=False)
 
 
 duds_path = f"data/tom_neg_duds.npy"
@@ -119,19 +147,6 @@ if os.path.exists(duds_path):
 else:
     precomputed_duds_neg = None
 
-# DS_tomneg = reader.Duds_AnnDS(
-#                             AnnData=sc.read_h5ad(f"data/tom_neg.h5ad"), 
-#                             timepoint_idx=None, 
-#                             precomputed_duds=precomputed_duds_neg,
-#                             n_dimension = n_dimension,
-#                             cellstate_key=cellstate_key,  #'DM_EigenVector'
-#                             log_transform=False,
-#                             norm_time=False,
-#                             deltax_key=None,
-#                             # base_cellstate = base_cellstate,
-#                             batchsize=100)
-# tom_neg_u_b = DS_tomneg.u_b.cpu().numpy().reshape(DS_full.T_b.shape[0], -1)
-# tom_neg_cellstate = torch.from_numpy(DS_full.cellstate).float()
 
 DM_range = (cellstate.max(axis=0).values - cellstate.min(axis=0).values).cpu().numpy()
 
@@ -172,27 +187,15 @@ savefig(fig_v2, "v_norm")
 
 # short-term 
 
-u_int_all = tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx)
+out_int_all = PINN.tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=timepoints, return_all=True)
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
-obs_u = np.log10(u_b + 1e-20)
-siml_u = np.log10(u_int_all + 1e-20)
 
-thres = np.quantile(siml_u, [0.05, 1])
-siml_u_clipped = np.clip(siml_u, a_min=thres[0], a_max=thres[1])
-
-fig_logobs1, axs = PINN.pl.params_in_umap(t7_ad, obs_u[timepoint_idx], timepoints=timepoints[timepoint_idx], param='\nlog10 observed density', cell_of_t=True);
-fig_logint1, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped[timepoint_idx],timepoints=timepoints[timepoint_idx], param='\nlog10 simulated density', cell_of_t=True);
-savefig(fig_logobs1, "Taining_Timpoint_observed_log_density")
-savefig(fig_logint1, "Taining_Timpoint_simulated_log_density")
-
+thres = np.quantile(u_int_all, [0.05, 1])
+siml_u_clipped = np.clip(u_int_all, a_min=thres[0], a_max=thres[1])
 imputed_t_idx = [i for i, t in enumerate(timepoints) if i not in timepoint_idx]
-if len(imputed_t_idx) > 0:
-    fig_logobs2, axs = PINN.pl.params_in_umap(t7_ad, obs_u[imputed_t_idx], timepoints=timepoints[imputed_t_idx], param='\nlog10 observed density', cell_of_t=True);
-    fig_logint2, axs = PINN.pl.params_in_umap(t7_ad, siml_u_clipped[imputed_t_idx],timepoints=timepoints[imputed_t_idx], param='\nlog10 simulated density', cell_of_t=True);
-    savefig(fig_logobs2, "Imputed_Timpoint_observed_log_density")
-    savefig(fig_logint2, "Imputed_Timpoint_simulated_log_density")
+
 
 fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b[timepoint_idx], timepoints=timepoints[timepoint_idx], param='\nlog10 observed density', cell_of_t=True);
 fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all[timepoint_idx],timepoints=timepoints[timepoint_idx], param='\nlog10 simulated density', cell_of_t=True);

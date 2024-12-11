@@ -1,5 +1,5 @@
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 import os, sys, re
 import numpy as np
 import pandas as pd
@@ -26,7 +26,7 @@ TM2=[0,1,2,3,5]
 
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/tom_pos-DM_scaled_n[0, 1, 2, 3, 4, 6, 8]/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=121-total_loss=8.91327095.ckpt"
+ckpt_path = "logs/u_free_NN_duds/pde_u_free_tsense/lightning_logs/version_0/checkpoints/epoch=68-total_loss=1.53883088.ckpt"
 # ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
 
 if __name__ == '__main__':
@@ -79,21 +79,24 @@ else:
     except IndexError:
         timepoint_idx = None
 
+timepoint_idx = TM1
+
 # detecting pre-computed duds
-duds_path = f"data/{data_name}_duds.npy"
+duds_path = f"data/{data_name}_surrogate_duds.npy"
 if os.path.exists(duds_path):
     precomputed_duds = np.load(duds_path)
 else:
     precomputed_duds = None
 
 # test mellon
-log_u, density_fns = tl.compute_mellon_u(adata, cellstate_key, timepoint_key='timepoint_tx_days', n_dimension = n_dimension)
-predictors = [lambda x : np.exp(model.predict(x)) for model in density_fns]
-PINN.pl.params_in_umap(adata, log_u, adata.uns['pop']['t'], param='\nlog u mellon', cell_of_t=False);
+if "mellon" in ckpt_path:
+    log_u, density_fns = tl.compute_mellon_u(adata, cellstate_key, timepoint_key='timepoint_tx_days', n_dimension = n_dimension)
+    predictors = [lambda x : np.exp(model.predict(x)) for model in density_fns]
+    PINN.pl.params_in_umap(adata, log_u, adata.uns['pop']['t'], param='\nlog u mellon', cell_of_t=False);
 
 DS_full = reader.Duds_AnnDS(
                             AnnData=adata, 
-                            timepoint_idx=5, 
+                            timepoint_idx=timepoint_idx, 
                             precomputed_duds=precomputed_duds,
                             timepoint_key = timepoint_key,
                             n_dimension = n_dimension,
@@ -101,7 +104,7 @@ DS_full = reader.Duds_AnnDS(
                             log_transform=False,
                             norm_time=False,
                             deltax_key="Delta_DM",
-                            density_funs = predictors,
+                            density_funs = None,
                             # base_cellstate = base_cellstate,
                             batchsize=100)
 # adata
@@ -172,7 +175,7 @@ savefig(fig_v2, "v_norm")
 
 # short-term 
 
-u_int_all = tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx)
+u_int_all = tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=timepoints)
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
