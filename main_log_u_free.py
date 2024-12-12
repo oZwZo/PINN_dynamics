@@ -148,7 +148,7 @@ predictors= np.array(predictors)
 
 DataSet_class = reader.Duds_AnnDS_fastmode if args.fast_mode else reader.Duds_AnnDS
 fast_mode_args = {
-    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":400
+    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":1000
 }
 fast_mode_args = fast_mode_args if args.fast_mode else {}
 
