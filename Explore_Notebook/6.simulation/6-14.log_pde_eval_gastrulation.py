@@ -27,19 +27,21 @@ TM2=[0,1,2,3,5]
 
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/log_u_model_nTM2/logrithmic_pde_tsense/lightning_logs/version_1/checkpoints/epoch=28-total_loss=0.10459992.ckpt"
+ckpt_path = "logs/debugging/logrithmic_pde_tsense/lightning_logs/version_13/checkpoints/epoch=1-total_loss=8.22609520.ckpt"
 
 
 if __name__ == '__main__':
     ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
     cuda = sys.argv[2] if len(sys.argv) > 2  else 'cuda:1'
 
-data_name = 'tom_pos'
-cellstate_key = 'DM_scaled'
+data_name = 'gastrulation'
+cellstate_key = 'DM_EigenVectors'
 timepoint_key = 'timepoint_tx_days'
-n_dimension = 30 
+n_dimension = 25
 ct_key = 'anno_man'
-cuda = "cuda:%d"%cuda if cuda.isdigit() else cuda
+cuda = "2"
+cuda = "cuda:%s"%cuda if cuda.isdigit() else cuda
+fast_mode = False
 
 
 # check result dir and create
@@ -98,23 +100,26 @@ if not os.path.exists(f"data/tom_pos_mellon_timecontinuous_predictor.json"):
     t_est.fit(X, X_times)
     t_est.predict.to_json(f"data/tom_pos_mellon_timecontinuous_predictor.json") 
 
-t_pred = mellon.Predictor.from_json(f"data/tom_pos_mellon_timecontinuous_predictor.json")
-
-# u_time_model = np.stack([t_pred(X, np.full(X_times.shape, np.log(t))) for t in timepoints])
-# threshold = np.quantile(u_time_model, q=[1e-3,1-1e-3], axis=1).T
-# u_time_model_clip = np.stack([np.clip(u,*threshold[i]) for i,u in enumerate(u_time_model)])
-# dloguds_timemodel = np.stack([t_pred.gradient(X, np.full(X_times.shape, np.log(t))) for t in timepoints])
-# np.save(f"data/{data_name}_mellon_dloguds.npy", dloguds_timemodel)
+t_pred = mellon.Predictor.from_json(f"data/{data_name}_mellon_timecontinuous_predictor.json")
 
 # test mellon
 predictors = []
 for i, t in enumerate(adata.uns['pop']['t']):
     # den_fun = lambda x : np.clip(t_est.predict(x, np.full((x.shape[0],), np.log(t))), *threshold[i])
-    den_fun = partial(t_pred, time = np.log(t)) 
+    if data_name == 'tom_pos':
+        t=np.log(t)
+    den_fun = partial(t_pred, time = t) 
     predictors.append(den_fun) 
 predictors= np.array(predictors)
 
-DS_full = reader.Duds_AnnDS(
+
+DataSet_class = reader.Duds_AnnDS_fastmode if fast_mode else reader.Duds_AnnDS
+fast_mode_args = {
+    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":600
+}
+fast_mode_args = fast_mode_args if fast_mode else {}
+
+DS_full = DataSet_class(
                             AnnData=adata, 
                             timepoint_idx=None, 
                             precomputed_duds=precomputed_duds,
@@ -122,7 +127,7 @@ DS_full = reader.Duds_AnnDS(
                             n_dimension = n_dimension,
                             cellstate_key=cellstate_key,  #'DM_EigenVector'
                             log_transform=True,
-                            norm_time=False,
+                            norm_time='min_minus',
                             deltax_key="Delta_DM",
                             density_funs = predictors,
                             # base_cellstate = base_cellstate,
