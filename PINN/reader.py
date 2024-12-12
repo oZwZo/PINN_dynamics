@@ -306,10 +306,11 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         print("Generating pseudobulk to represent cell-state")
 
         adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
-        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=10)        # rebase data on low dimension
-        pdata = tl.get_pseudobulk(adata_DM, pseudobulk_key)       # generate pseudobulk
+        X_df = pd.DataFrame(adata.obsm[self.cellstate_key][:,:self.n_dimension], 
+                            columns=['DM_%s'%i for i in range(self.n_dimension)])
+        X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
 
-        pdb_cellstate = pdata.X.copy()
+        pdb_cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
         self.cellstate = pdb_cellstate
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
@@ -368,7 +369,12 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
             # wrap into a partial function for multi-process
             # iter_fn = partial(tl.evaluate_u_ds, cellstate=cellstate, u_tb=u_tb, delta_s=delta_s, den_fn=den_fn, scaler=scaler)
             # du_dcs_t = process_map(iter_fn, range(cellstate.shape[0]), max_workers=5, chunksize=1000) # (n_cell, n_dim)
-            if 'gradient' in dir(den_fn):
+            if isinstance(den_fn, partial):
+                func = den_fn.func
+                kwargs = den_fn.keywords
+                if 'gradient' in dir(func):
+                    du_dcs_t = func.gradient(cellstate, **kwargs)
+            elif 'gradient' in dir(den_fn):
                 du_dcs_t = den_fn.gradient(cellstate)
             else:
                 du_dcs_t = []
@@ -457,10 +463,12 @@ class Duds_AnnDS_fastmode(Duds_AnnDS):
 
         adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
         self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
-        adata_DM = tl.make_coord_adata(adata, cellstate_key='DM_scaled', n_dimesion=self.n_dimension)        # rebase data on low dimension
-        pdata = tl.get_pseudobulk(adata_DM, pseudobulk_key)       # generate pseudobulk
 
-        pdb_cellstate = pdata.X.copy()
+        X_df = pd.DataFrame(adata.obsm[self.cellstate_key][:,:self.n_dimension], 
+                            columns=['DM_%s'%i for i in range(self.n_dimension)])
+        X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
+
+        pdb_cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
         self.cellstate = pdb_cellstate
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()

@@ -379,7 +379,7 @@ def _sample_by_distance(dist_array, candidate_idx, alpha=None, repeat=1):
         neighbor_idx = neighbor_idx[0]
     return neighbor_idx, p
 
-def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=True):
+def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=True, temperature=1):
     """
     the Key function defines the noise sampling process 
     given the starting point i
@@ -426,7 +426,7 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
             #     knn_idx = pass_2_idx
         
             # knn_idx = traverse_neighbor(connectivities, k, knn_idx) 
-        knn_idx = np.argpartition(connectivities[i].A, -1*k)[-1*k:].tolist()
+        knn_idx = np.argpartition(connectivities[i].A[0], -1*k)[-1*k:].tolist()
 
         # 1 : neighbor with the same condition
         pass_1_idx = knn_idx
@@ -456,7 +456,7 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
             neighbor_idx = i
         else:
             # neighbor_idx, p = _sample_by_distance(distance, final_index)
-            knn_p = connectivities[i,final_index].A.flatten()
+            knn_p = connectivities[i,final_index].A.flatten()**temperature
             p = knn_p / knn_p.sum() if knn_p.sum() != 0 else None
 
             neighbor_idx = np.random.choice(final_index, p=p)
@@ -467,7 +467,7 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     return delta_X, neighbor_ls
 
 
-def make_coord_adata(adata, cellstate_key, n_dimesion, v = None):
+def make_coord_adata(adata, cellstate_key, n_dimension, v = None):
     r"""
     construct adata based on cellstate coodinates from expression matrix based adata
     the new adata is mainly for visualizing v
@@ -480,7 +480,7 @@ def make_coord_adata(adata, cellstate_key, n_dimesion, v = None):
     v : ndarray of shape [t, n_dim], default none
     """
     # create new adata with DM coordinate as X
-    cellstate = adata.obsm[cellstate_key][:,:n_dimesion]
+    cellstate = adata.obsm[cellstate_key][:,:n_dimension]
     new_ad = ad.AnnData(
         X = cellstate,
         obs = adata.obs.copy(),
@@ -529,7 +529,7 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     if resolution is None:
         resolution = 200 
     
-    magnitude_of = lambda x: int(np.log10(x))
+    magnitude_of = lambda x: int(np.log2(x))
 
     if key_added not in adata.obs_keys():
         sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=42)
@@ -546,7 +546,7 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     return adata
     
 
-def get_pseudobulk(adata_DM, pseudobulk_key='pseudo_bulk'):
+def get_pseudobulk(adata, pseudobulk_key='pseudo_bulk', cellstate_key, n_dimension):
     r"""
     generate pseudo-bulk (meta-cell) using super-high resolution clustering
 
@@ -566,14 +566,26 @@ def get_pseudobulk(adata_DM, pseudobulk_key='pseudo_bulk'):
     >>> pdata = get_pseudobulk(adata_DM, 'pseudo_bulk')       # generate pseudobulk
     >>> pdata.shape
     """
-    adata_DM.obs = adata_DM.obs.dropna(axis=1, how='any')
-    pdata = dc.get_pseudobulk(
-        adata_DM,
-        sample_col=pseudobulk_key,
-        groups_col=None,
-        mode='mean',
-        min_cells=3,
-        min_counts=0,
+    # adata_DM.obs = adata_DM.obs.dropna(axis=1, how='any')
+    # pdata = dc.get_pseudobulk(
+    #     adata_DM,
+    #     sample_col=pseudobulk_key,
+    #     groups_col=None,
+    #     mode='mean',
+    #     min_cells=1,
+    #     min_counts=0,
+    #     skip_checks = True
+    # )
+
+    X_df = pd.DataFrame(adata.obsm[cellstate_key][:,:n_dimension], 
+                            columns=['DM_%s'%i for i in range(n_dimension)])
+    X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
+    cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
+
+    pdata = ad.AnnData(
+        X = cellstate,
+        obs = pd.Series(adata.obs[pseudobulk_key].values, dtype='str'),
+        var = pd.DataFrame(['DM_%d'%d for d in range(cellstate.shape[1])]).set_index(0)
     )
 
     return pdata

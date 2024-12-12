@@ -279,6 +279,32 @@ class pde_params_base(pl.LightningModule):
 
         return L_pop
 
+    # def growth_loss(self, u, s, t_list) -> torch.Tensor:
+    #     r"""
+    #     the loss term defined for population size, governed by Gaussian Negative Likelihood loss
+    #         (T_j - T_i) ∑ p(x) ∫ exp ( ∫  )
+        
+    #     Arguments
+    #     ---------
+    #     u_pred : Tensor (t_obs, n_grid), the predicted density for all the cell states, self.u_theta(s_all, t_obs)
+    #     Mean : Tensor (t_obs, 1), D['pop']['mean'], the mean of population size over repeat
+    #     Var : Tensor (t_obs, 1), D['pop']['var'] / D['pop']['n_exp'] , the var of population size over repeat
+        
+    #     Return
+    #     ---------
+    #     L_pop : Tensor (1,), loss term summing all observed time point
+    #     """
+        
+    #     # copying
+    #     # assert u_pred.shape[1] == self.n_grid , "make sure the same grid is applied"
+        
+    #     # the estimated population size N_θ = ∫ u ds
+    #     # N_theta = 0.5*(u_pred[:,1:]+u_pred[:,:-1]).sum(dim=1, keepdim = True) #/ h_inv   
+        
+    #     odeint(self.)
+
+    #     return L_pop
+
     def distribution_loss(self, u_pred_b, u_b) -> torch.Tensor:
         r"""
         the loss defined as the kl divergence of the distribution, used to keep the shape
@@ -692,7 +718,7 @@ class pde_u_free(pde_params):
             
             duds_by_time = torch.autograd.grad(dudt.sum(), s, create_graph=True , allow_unused=True)[0]  
 
-        return (dudt, ds, duds_by_time)
+        return (dudt, ds, duds_by_time, growth, drift, diffuse)
 
     def forward(self, t, states):
         return self.ode_func(t, states)
@@ -764,9 +790,10 @@ class pde_u_free(pde_params):
         # loss 2 : dynamics 
 
         # init_condition 
-        init_condition = (ut, s, du_dDeltax[:,0])
+        zeros = torch.zeros_like(ut)
+        init_condition = (ut, s, du_dDeltax[:,0], zeros.clone(), zeros.clone(), zeros.clone())
 
-        u_int, s_t, duds = odeint_adjoint(
+        u_int, s_t, duds, growth, drift, diffuse = odeint_adjoint(
                         self,
                         y0 = init_condition,
                         t = torch.tensor([t0, t1]).type(torch.float32).to(device),
@@ -794,7 +821,18 @@ class pde_u_free(pde_params):
         v_loss = self.constrain_v(s, t, deltax)
         duds_loss = -1 * nn.functional.cosine_similarity(duds[-1],du_dDeltax[:,-1])
 
-        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + duds_loss.mean()
+        
+        if self.log_transform:
+            left = torch.exp(utp1).sum()
+            right = torch.exp(ut + growth[-1]).sum()
+            growth_loss = self.loss_fn(torch.log(left), torch.log(right)) 
+        else:
+            log_mass_gain = torch.log(nn.functional.relu(utp1.sum() -  ut.sum()) + 1e-30)
+            log_predicted_gain = torch.log(nn.functional.relu(growth[-1].sum()) + 1e-30)
+            growth_loss = self.loss_fn(log_mass_gain, log_predicted_gain) 
+
+
+        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + duds_loss.mean() + growth_loss
 
 
         with torch.no_grad():
@@ -829,7 +867,8 @@ class logrithmic_pde(pde_u_free):
         D_penalty : float , default None the weight for penalizing D
         """
         super().__init__(channels=channels, step_size=step_size, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight, time_scale_factor=time_scale_factor)
-    
+        self.log_transform = True
+        
     def equation(self, s, t, logu, dloguds) -> tuple:
         
         D = self.D(s,t)

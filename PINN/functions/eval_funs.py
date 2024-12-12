@@ -130,44 +130,40 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
                             method='dopri5',
                             adjoint_options={'norm':'seminorm'},
                         )
-
+            int_out = list(int_out)
             u_t = int_out[0]
+            if not pde_model.log_transform:
+                int_out[0] = torch.nn.functional.relu(u_t[1:])
 
-            int_out[0] = torch.nn.functional.relu(u_t[1:])
+            del u_t
 
-            del u_t, s_t
 
-            if return_all:
-                if len(out_t) == 0:
-                    out_t = [[] for i in range(len(int_out)) ]
+            if len(out_t) == 0:
+                out_t = [[] for i in range(len(int_out)) ]
 
-                for i, o in enumerate(int_out):
-                    # add the i_th output
-                    out_t[i].append(o.detach().cpu().numpy())
+            for i, o in enumerate(int_out):
+                # add the i_th output
+                out_t[i].append(o.detach().cpu().numpy())
 
             # torch.cuda.empty_cache()
 
         # concate at batch - wise
-        if return_all:
-            for i, ith_out in enumerate(out_t):
-                conate_axis = 1 if len(ith_out[0].shape) > 0 else 0 # 1 is sample wise if more than 1 evaluation timepoint
-                ith_concate = np.concatenate(ith_out, axis=conate_axis)
-                out_t[i] = ith_concate
 
-        u_int = np.concatenate(u_t_ls, axis=len(u_int.shape)-1)
-        
-        u_int_all_ls.append(u_int)
-        if return_all:
-            all_output.append(out_t)
+        for i, ith_out in enumerate(out_t):
+            conate_axis = 1 if len(ith_out[0].shape) > 0 else 0 # 1 is sample wise if more than 1 evaluation timepoint
+            ith_concate = np.concatenate(ith_out, axis=conate_axis)
+            out_t[i] = ith_concate
+
+       
+        all_output.append(out_t)
             
         # it+=1
 
     # conate at timepoint-wise
-
-    all_output
+    all_output = [np.concatenate([o[i] for o in all_output], axis=0) for i in range(len(out_t))]
 
     if return_all:
         return all_output
     else:
-        return u_int_all
+        return all_output[0]
 

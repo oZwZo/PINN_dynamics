@@ -69,6 +69,8 @@ class AnnDataset(Dataset):
             # else:
             T_b = T_b - T_b.min() 
             self.T_b = T_b
+        elif norm_time == 'none':
+            self.T_b = self.popD['t']
         else:
             T_b = self.popD['t']
             T_b = T_b / T_b.min() 
