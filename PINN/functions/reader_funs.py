@@ -546,7 +546,7 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     return adata
     
 
-def get_pseudobulk(adata, pseudobulk_key='pseudo_bulk', cellstate_key, n_dimension):
+def get_pseudobulk(adata, cellstate_key, n_dimension, pseudobulk_key='pseudo_bulk'):
     r"""
     generate pseudo-bulk (meta-cell) using super-high resolution clustering
 
