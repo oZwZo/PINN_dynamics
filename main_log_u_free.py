@@ -127,26 +127,28 @@ if args.pretrained is not None:
 # cellstate = adata.obsm[args.cellstate_key][:,:args.n_dimension]
 # log_u, density_fns = PINN.tl.compute_mellon_u(adata, args.cellstate_key, timepoint_key='timepoint_tx_days', n_dimension = args.n_dimension)
 
-if not os.path.exists(f"data/tom_pos_mellon_timecontinuous_predictor.json"):
+if not os.path.exists(f"data/{args.dataset}_mellon_timecontinuous_predictor.json"):
     X = adata.obsm[args.cellstate_key]
     X_times = adata.obs['timepoint_tx_days'].astype(int).apply(np.log)
     ls_time_estimate = 1.5 * np.mean(np.diff(np.log(adata.uns['pop']['t'])))
     t_est = mellon.TimeSensitiveDensityEstimator(d=2, ls_time=ls_time_estimate)
     # Fit the estimator to the data
     t_est.fit(X, X_times)
-    t_est.predict.to_json(f"data/tom_pos_mellon_timecontinuous_predictor.json") 
+    t_est.predict.to_json(f"data/{args.dataset}_mellon_timecontinuous_predictor.json") 
 
-t_pred = mellon.Predictor.from_json(f"data/tom_pos_mellon_timecontinuous_predictor.json")
+t_pred = mellon.Predictor.from_json(f"data/{args.dataset}_mellon_timecontinuous_predictor.json")
 
 predictors = []
 for i, t in enumerate(adata.uns['pop']['t']):
-    den_fun = partial(t_pred, time = np.log(t)) 
+    if args.dataset == 'tom_pos':
+        t = np.log(t)
+    den_fun = partial(t_pred, time = t) 
     predictors.append(den_fun) 
 predictors= np.array(predictors)
 
 DataSet_class = reader.Duds_AnnDS_fastmode if args.fast_mode else reader.Duds_AnnDS
 fast_mode_args = {
-    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":None
+    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":400
 }
 fast_mode_args = fast_mode_args if args.fast_mode else {}
 
