@@ -44,6 +44,7 @@ parser.add_argument("--step_size", type=float, required=False, default=None, hel
 parser.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
 parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
 parser.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
+parser.add_argument("--time_scale_factor", type=float, required=False, default=5, help='the scale the time for ode')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
 parser.add_argument("--progress_bar", type=str, required=False, default="True", help='whether show progress bar on screen, boolen value, default True')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
@@ -108,6 +109,7 @@ model = model_class(
         D_penalty = args.D_penalty, 
         deltax_weight = args.deltax_weight,
         weight_intensity = args.weight_intensity,
+        time_scale_factor = args.time_scale_factor,
         **model_kws
     )
 
@@ -159,6 +161,13 @@ if os.path.exists(duds_path):
 else:
     precomputed_duds = None
 
+if (adata.shape[0] > 5e4) and not args.fast_mode:
+    adata_sub = sc.pp.subsample(adata, fraction=0.05, random_state=0, copy=True)
+    subset_index = [cb in adata_sub.obs_names for cb in adata.obs_names]
+    if precomputed_duds is not None:
+        precomputed_duds = precomputed_duds[:, subset_index,:]
+    adata = adata_sub
+    
 train_DS = DataSet_class(
                         AnnData=adata, 
                         timepoint_idx=timepoint_idx, 
@@ -166,10 +175,10 @@ train_DS = DataSet_class(
                         n_dimension = args.n_dimension,
                         cellstate_key=args.cellstate_key,  
                         log_transform=True, # IMPORTANT  !
-                        norm_time=False,
+                        norm_time='min_minus',
                         deltax_key=args.deltax_key,
                         density_funs = predictors,
-                        batchsize=1,
+                        batchsize=args.batch_size,
                         **fast_mode_args
                         )
 
@@ -180,7 +189,7 @@ def my_collection_fn(batch):
     n_item = len(batch[0])    
     return [torch.cat([ts[i] for ts in batch], dim=0) for i in range(n_item)]
 
-train_DL = DataLoader(train_DS, batch_size=args.batch_size, num_workers=10, collate_fn=my_collection_fn)
+train_DL = DataLoader(train_DS, batch_size=None, num_workers=10)
 # train_iter = iter(train_DL)
 # batch = next(train_iter)
 

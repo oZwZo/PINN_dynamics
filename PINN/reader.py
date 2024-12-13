@@ -72,12 +72,18 @@ class HigDim_AnnDS(AnnDataset):
         elif deltax_key in self.adata.layers:
             self.deltax = self.adata.layers[deltax_key].copy()[:, :n_dimension]
         
-        if norm_time:
+        if norm_time == 'log':
             T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
             T_b = T_b / T_b.max()
+            self.T_b = T_b
+        elif norm_time == 'min_minus': 
+            self.T_b = self.popD['t'] - min(self.popD['t'])
+        elif norm_time == 'none':
+            self.T_b = self.popD['t']
         else:
             T_b = self.popD['t']
             T_b = T_b / T_b.min() 
+            self.T_b = T_b
         
         ###
         # set up boundary conditions 
@@ -103,8 +109,8 @@ class HigDim_AnnDS(AnnDataset):
         
         # observeds
         self.pop_mean = self.popD['mean'] # (tb,)
-        self.T_b = T_b         # (tb,)
-        var_ls = [self.popD['var'][i] / self.popD['n_lib'][i] for i in range(len(T_b))]
+        # self.T_b = T_b         # (tb,)
+        var_ls = [self.popD['var'][i] / self.popD['n_lib'][i] for i in range(len(self.popD['t']))]
         self.pop_var = np.array(var_ls)  # (tb,)
         
         ## compute the densities
@@ -426,7 +432,8 @@ class Duds_AnnDS(TwoTimpepoint_AnnDS):
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        duds = torch.from_numpy(self.duds[None, [i_t, i_tp1], s_index]).float()
+        duds = torch.from_numpy(self.duds[[i_t, i_tp1]][:, s_index]).float()
+        duds = torch.transpose(duds, 0, 1)
         return  s, t, t_p1, u_t, u_tp1, deltax, duds
 
 

@@ -58,23 +58,7 @@ class AnnDataset(Dataset):
         self.popD['mean'] = self.popD['mean'] / N0
         self.popD['var'] = self.popD['var']/ N0
 
-        if norm_time == 'log':
-            T_b =  np.log(np.where(self.popD['t']==0, 1, self.popD['t']))
-            T_b = T_b / T_b.max()
-            self.T_b = T_b
-        elif norm_time == 'min_minus':
-            T_b = self.popD['t']
-            # if T_b.max() / T_b.min() > 5:
-            #     T_b = T_b / T_b.min() 
-            # else:
-            T_b = T_b - T_b.min() 
-            self.T_b = T_b
-        elif norm_time == 'none':
-            self.T_b = self.popD['t']
-        else:
-            T_b = self.popD['t']
-            T_b = T_b / T_b.min() 
-            self.T_b = T_b
+        
         ###
         # set up params
         ### 

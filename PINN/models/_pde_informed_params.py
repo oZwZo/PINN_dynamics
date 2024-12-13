@@ -358,7 +358,7 @@ class pde_params_base(pl.LightningModule):
 
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
+    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
         r"""
         mlp u theta
 
@@ -387,6 +387,7 @@ class pde_params(pde_params_base):
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
         self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
+        self.growth_weight = 0.1 if growth_weight is None else growth_weight
         
        
         MLP_Module = MLP_surrogate
@@ -652,7 +653,7 @@ class pde_params(pde_params_base):
 
 
 class pde_u_free(pde_params):
-    def __init__(self, channels, step_size, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
+    def __init__(self, channels, step_size, growth_weight=None,collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
         r"""
         high dimensional pde without surrogate u
 
@@ -671,7 +672,7 @@ class pde_u_free(pde_params):
         optim_class : str, the optimizer used
         D_penalty : float , default None the weight for penalizing D
         """
-        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
+        super().__init__(channels=channels, growth_weight=growth_weight, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
         self.save_hyperparameters()
         self.b1 = 35 / 384
         if step_size is None:
@@ -825,14 +826,14 @@ class pde_u_free(pde_params):
         if self.log_transform:
             left = torch.exp(utp1).sum()
             right = torch.exp(ut + growth[-1]).sum()
-            growth_loss = self.loss_fn(torch.log(left), torch.log(right)) 
+            growth_loss = self.loss_fn(torch.log(left), torch.log(right)) / left
         else:
             log_mass_gain = torch.log(nn.functional.relu(utp1.sum() -  ut.sum()) + 1e-30)
             log_predicted_gain = torch.log(nn.functional.relu(growth[-1].sum()) + 1e-30)
             growth_loss = self.loss_fn(log_mass_gain, log_predicted_gain) 
 
 
-        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + duds_loss.mean() + growth_loss
+        total_loss =  2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + duds_loss.mean() + self.growth_weight * growth_loss
 
 
         with torch.no_grad():
