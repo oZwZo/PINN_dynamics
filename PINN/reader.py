@@ -306,6 +306,7 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         print("Generating pseudobulk to represent cell-state")
 
         adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
+        self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
         X_df = pd.DataFrame(adata.obsm[self.cellstate_key][:,:self.n_dimension], 
                             columns=['DM_%s'%i for i in range(self.n_dimension)])
         X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')

@@ -8,7 +8,8 @@ import time
 from tqdm.auto import tqdm
 from TorchDiffEqPack import odesolve
 from torchdiffeq import odeint_adjoint as odeint
-
+from scipy.stats import pearsonr, spearmanr
+from scipy.special import kl_div
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
@@ -119,9 +120,10 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
             tompos_u0 = torch.from_numpy(u_b[it, i:i+chunk_size]).float().to(device).requires_grad_()
             duds_0 = torch.from_numpy(duds[it, i:i+chunk_size, :]).float().to(device).requires_grad_()
             
-            init_condition = (tompos_u0, s0) if model_name == 'pde_params' else (tompos_u0, s0, duds_0)
+            y_0 = torch.zeros_like(tompos_u0)
+            init_condition = (tompos_u0, s0) if model_name == 'pde_params' else (tompos_u0, s0, duds_0, y_0.clone(), y_0.clone(), y_0.clone())
 
-            int_out = odeint(
+            int_out_raw = odeint(
                             pde_model,
                             y0 = init_condition,
                             t = torch.tensor(t_list[it:itp1+1]).type(torch.float32).to(device),
@@ -130,13 +132,16 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
                             method='dopri5',
                             adjoint_options={'norm':'seminorm'},
                         )
-            int_out = list(int_out)
-            u_t = int_out[0]
-            if not pde_model.log_transform:
-                int_out[0] = torch.nn.functional.relu(u_t[1:])
+            int_out = []
+            u_t = int_out_raw[0]
+            if pde_model.log_transform:
+                int_out.append(u_t[1:])
+            else:
+                int_out.append(torch.nn.functional.relu(u_t[1:]))
 
             del u_t
 
+            int_out.extend(int_out_raw[1:])
 
             if len(out_t) == 0:
                 out_t = [[] for i in range(len(int_out)) ]
@@ -167,3 +172,89 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
     else:
         return all_output[0]
 
+def param_vs_score(adata, obs_key, param, timepoints=None,timepoint_key='timepoint_tx_days'):
+    if timepoints is None:
+        timepoints = adata.obs[timepoint_key].unique()
+
+    assert len(timepoints) == param.shape[0], "the provided timepoints and the given params must the same dimension"
+    spr = []
+    pr = []
+    score = adata.obs[obs_key].values
+    for i,t in enumerate(timepoints):
+        idx_t = adata.obs[timepoint_key] == t
+        spr.append(spearmanr(param[i][idx_t], score[idx_t])[0] )
+        pr.append( pearsonr(param[i][idx_t], score[idx_t])[0] )
+    
+    return np.array(spr), np.array(pr)
+
+def W_distance(u_b, u_simulate, p=2, log_transform=False):
+    r"""
+    Normalize the density and compute the Wasserstein distance between observation and prediction.
+    Log-density is supported, pass log_transform = True
+
+    Input
+    -------
+    u_b : ndarray, [n_time, n_cell] , observed density
+    u_simulate : ndarray, [n_time, n_cell], inferred desity
+    p : int, degree of the distance, default W-2 distance
+    sanity_check : bool, whether check shape and positivity
+
+    Return 
+    -------
+    Wasserstein distance : ndarry, [n_time,]
+    """
+
+    log_transform = True if np.any(u_b<0) else log_transform
+
+    distance_ls = []
+    for t in range(u_b.shape[0]):
+
+        if log_transform:
+            u_b[t] = np.exp(u_b[t])
+            u_simulate[t] = np.exp(u_simulate[t])
+
+        # normalize
+        p_b = u_b[t] / u_b[t].sum()
+        p_int = u_simulate[t] / u_simulate[t].sum()
+
+        if p==1:
+            w = np.abs(p_b - p_int)
+        elif p > 1:
+            w = np.power(p_b - p_int, p)
+            w = w**(1/p)
+        distance_ls.append(np.sum(p_b*w))
+
+    return np.array(distance_ls)
+
+def KLD_density(u_b, u_simulate, sanity_check=True):
+    r"""
+    Normalize the density and compute the KL-divergence between observation and prediction
+
+    Input
+    -------
+    u_b : ndarray, [n_time, n_cell] , observed density
+    u_simulate : ndarray, [n_time, n_cell], inferred desity
+    sanity_check : bool, whether check shape and positivity
+
+    Return 
+    -------
+    KLD_ls : ndarray, [n_time, ]
+    """
+    if sanity_check:
+        assert u_b.shape == u_simulate.shape, "observation and prediction must be the same"
+        assert np.all(u_b>=0), "density must be positive"
+
+    KLD_ls = []
+    for t in range(u_b.shape[0]):
+
+        # normalize
+        p_b = u_b[t] / u_b[t].sum()
+        p_sim = u_simulate[t] / u_simulate[t].sum()
+        p_b += 1e-34
+        p_sim += 1e-34
+
+        # kld
+        KLD_ls.append(kl_div(p_b, p_sim).sum())
+    KLD_ls= np.array(KLD_ls)
+
+    return KLD_ls

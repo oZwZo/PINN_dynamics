@@ -546,7 +546,7 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     return adata
     
 
-def get_pseudobulk(adata, cellstate_key, n_dimension, pseudobulk_key='pseudo_bulk'):
+def get_pseudobulk(adata, cellstate_key, n_dimension=None, pseudobulk_key='pseudo_bulk', keep_index=False):
     r"""
     generate pseudo-bulk (meta-cell) using super-high resolution clustering
 
@@ -577,15 +577,19 @@ def get_pseudobulk(adata, cellstate_key, n_dimension, pseudobulk_key='pseudo_bul
     #     skip_checks = True
     # )
 
-    X_df = pd.DataFrame(adata.obsm[cellstate_key][:,:n_dimension], 
-                            columns=['DM_%s'%i for i in range(n_dimension)])
+    # get X and dimension
+    if cellstate_key in adata.obsm_keys():
+        X = adata.obsm[cellstate_key][:,:n_dimension]
+    elif cellstate_key in adata.obs_keys():
+        X = adata.obs[cellstate_key].values[:,None]
+    n_dimension = X.shape[1] if n_dimension is None else n_dimension
+
+    # group
+    X_df = pd.DataFrame(X, columns=['DM_%s'%i for i in range(n_dimension)])
     X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
-    cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
+    grouped_cellstate = X_df.groupby(pseudobulk_key).agg("mean")
 
-    pdata = ad.AnnData(
-        X = cellstate,
-        obs = pd.Series(adata.obs[pseudobulk_key].values, dtype='str'),
-        var = pd.DataFrame(['DM_%d'%d for d in range(cellstate.shape[1])]).set_index(0)
-    )
-
-    return pdata
+    if keep_index:
+        return grouped_cellstate
+    else:
+        return grouped_cellstate.values
