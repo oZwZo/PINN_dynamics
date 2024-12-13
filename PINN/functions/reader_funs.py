@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import anndata as ad
 import scanpy as sc
-import decoupler as dc
+# import decoupler as dc
 from tqdm import tqdm
 from scipy.stats import gaussian_kde,entropy
 from scipy.integrate import trapz
