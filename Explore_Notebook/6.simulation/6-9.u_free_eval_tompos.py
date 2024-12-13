@@ -26,12 +26,12 @@ TM2=[0,1,2,3,5]
 
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/u_free_NN_duds/pde_u_free_tsense/lightning_logs/version_0/checkpoints/epoch=68-total_loss=1.53883088.ckpt"
+ckpt_path = "logs/u_free_NN_duds/pde_u_free_tsense/lightning_logs/version_0/checkpoints/epoch=58-total_loss=1.60089636.ckpt"
 # ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
 
 if __name__ == '__main__':
     ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
-    cuda = sys.argv[2] if len(sys.argv) > 2  else 'cuda:1'
+    cuda = sys.argv[2] if len(sys.argv) > 2  else 'cuda:2'
 
 data_name = 'tom_pos'
 cellstate_key = 'DM_scaled'
@@ -62,7 +62,10 @@ model_class = eval(f"models.{model_name}")
 # # MODEL CLASS and define model
 pde_model = model_class.load_from_checkpoint(ckpt_path, map_location=cuda)
 device = pde_model.device
-
+if model_name == 'logrithmic_pde':
+    pde_model.log_transform = True
+else:
+    pde_model.log_transform = False
 
 adata = sc.read_h5ad(f"data/{data_name}.h5ad")
 timepoints = adata.uns['pop']['t']
@@ -96,7 +99,7 @@ if "mellon" in ckpt_path:
 
 DS_full = reader.Duds_AnnDS(
                             AnnData=adata, 
-                            timepoint_idx=timepoint_idx, 
+                            timepoint_idx=None, 
                             precomputed_duds=precomputed_duds,
                             timepoint_key = timepoint_key,
                             n_dimension = n_dimension,
@@ -175,7 +178,11 @@ savefig(fig_v2, "v_norm")
 
 # short-term 
 
-u_int_all = tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=timepoints)
+u_int_all = tl.eval_funs.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=timepoints)
+u_int_all_raw = u_int_all.copy()
+
+u_int_all = np.concatenate([u_b[[0]],u_int_all], axis=0)
+
 print(u_b.sum(axis=1))
 print(u_int_all.sum(axis=1))
 
@@ -282,41 +289,32 @@ def vis_perform(W, y_label, kind='bar'):
     ax.set_xticklabels(timepoints)
     ax.legend()
     return fig, ax
+KLD_ls = tl.KLD_density(np.exp(u_b), np.exp(u_int_all)) if pde_model.log_transform else tl.KLD_density(u_b, u_int_all)
+W1 = tl.W_distance(u_b, u_int_all, p=1)
+W2 = tl.W_distance(u_b, u_int_all)
 
-def W_distance(u_b, u_int_all, p=2):
-    distance_ls = []
-    for t in range(u_b.shape[0]):
-        p_b = u_b[t] / u_b[t].sum()
-        p_int = u_int_all[t] / u_int_all[t].sum()
-        if p==1:
-            w = np.abs(p_b - p_int)
-        elif p > 1:
-            w = np.power(p_b - p_int, p)
-            w = w**(1/p)
-        distance_ls.append(np.sum(p_b*w))
-    return np.array(distance_ls)
+# copmare g with S-score
 
-KLD_ls = []
-for t in range(u_b.shape[0]):
-    p_b = u_b[t] / u_b[t].sum()
-    p_int = u_int_all[t] / u_int_all[t].sum()
-    p_b += 1e-34
-    p_int += 1e-34
+S_score_spr, S_score_pr = tl.eval_funs.param_vs_score(adata, 'S_score', g_pred_ay)
+print(S_score_spr, S_score_pr)
 
-    KLD_ls.append(kl_div(p_b, p_int).sum())
-KLD_ls= np.array(KLD_ls)
+G2M_score_spr, G2M_score_pr = tl.eval_funs.param_vs_score(adata, 'G2M_score', g_pred_ay)
+print(G2M_score_spr, G2M_score_pr)
 
-W1 = W_distance(u_b, u_int_all, p=1)
-W2 = W_distance(u_b, u_int_all)
+HSC_score_spr, HSC_score_pr = tl.eval_funs.param_vs_score(adata, 'HSCscore', g_pred_ay)
+print(HSC_score_spr, HSC_score_pr)
 
-perform_df=pd.DataFrame({'KLD': KLD_ls, 'W1':W1, "W2":W2})
+perform_df=pd.DataFrame({'KLD': KLD_ls, 'W1':W1, "W2":W2, "S_score_g_spr":S_score_spr, "HSCscore_g_spr":HSC_score_spr})
 perform_df['timepoints'] = timepoints
 perform_df['datatype'] = ['observed' if i in timepoint_idx else 'imputed' for i,t in enumerate(timepoints) ]
 perform_df.to_csv(f"{result_dir}/{result_base}_perform.csv",index=False)
 
 KLD_fig, ax = vis_perform(KLD_ls, "KLD : true v.s. predicted density", kind='scatter')
+S_fig, ax = vis_perform(S_score_spr, "spr (S-score & g) ", kind='scatter')
+HSC_fig, ax = vis_perform(HSC_score_spr, "spr (HSC-score & g)", kind='scatter')
 W1_fig, ax = vis_perform(W1, "W1 distance", kind='bar')
 W2_fig, ax = vis_perform(W2, "W2 distance", kind='bar')
+
 
 savefig(KLD_fig, "KLD")
 savefig(W1_fig, "W1")

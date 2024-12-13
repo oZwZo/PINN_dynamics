@@ -17,7 +17,7 @@ import mellon
 import matplotlib as mpl
 import seaborn as sns
 from matplotlib.patches import Patch
-
+from scipy.stats import pearsonr, spearmanr
 from matplotlib.backends.backend_pdf import PdfPages
 
 main_dir="/home/wergillius/Project/PINN_dynamics"
@@ -27,7 +27,7 @@ TM2=[0,1,2,3,5]
 
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/log_u_model_nTM2/logrithmic_pde_tsense/lightning_logs/version_1/checkpoints/epoch=28-total_loss=0.10459992.ckpt"
+ckpt_path = "logs/massgain_nTM2/logrithmic_pde_tsense/lightning_logs/version_2/checkpoints/epoch=47-total_loss=2.81693268.ckpt"
 
 
 if __name__ == '__main__':
@@ -211,8 +211,7 @@ if len(imputed_t_idx) > 0:
     savefig(fig_int2, "Imputed_Timpoint_simulated_density")
 
 
-from scipy.stats import pearsonr
-from scipy.special import kl_div
+
 
 
 def vis_perform(W, y_label, kind='bar'):
@@ -231,44 +230,65 @@ def vis_perform(W, y_label, kind='bar'):
     ax.legend()
     return fig, ax
 
-def W_distance(u_b, u_int_all, p=2):
-    distance_ls = []
-    for t in range(u_b.shape[0]):
-        p_b = u_b[t] / u_b[t].sum()
-        p_int = u_int_all[t] / u_int_all[t].sum()
-        if p==1:
-            w = np.abs(p_b - p_int)
-        elif p > 1:
-            w = np.power(p_b - p_int, p)
-            w = w**(1/p)
-        distance_ls.append(np.sum(p_b*w))
-    return np.array(distance_ls)
 
-KLD_ls = []
-for t in range(u_b.shape[0]):
-    p_b = u_b[t] / u_b[t].sum()
-    p_int = u_int_all[t] / u_int_all[t].sum()
-    p_b += 1e-34
-    p_int += 1e-34
+KLD_ls = tl.KLD_density(np.exp(u_b), np.exp(u_int_all)) if pde_model.log_transform else tl.KLD_density(u_b, u_int_all)
+W1 = tl.W_distance(u_b, u_int_all, p=1)
+W2 = tl.W_distance(u_b, u_int_all)
 
-    KLD_ls.append(kl_div(p_b, p_int).sum())
-KLD_ls= np.array(KLD_ls)
+# copmare g with S-score
 
-W1 = W_distance(u_b, u_int_all, p=1)
-W2 = W_distance(u_b, u_int_all)
+S_score_spr, S_score_pr = tl.eval_funs.param_vs_score(adata, 'S_score', g_pred_ay)
+print(S_score_spr, S_score_pr)
 
-perform_df=pd.DataFrame({'KLD': KLD_ls, 'W1':W1, "W2":W2})
+G2M_score_spr, G2M_score_pr = tl.eval_funs.param_vs_score(adata, 'G2M_score', g_pred_ay)
+print(G2M_score_spr, G2M_score_pr)
+
+HSC_score_spr, HSC_score_pr = tl.eval_funs.param_vs_score(adata, 'HSCscore', g_pred_ay)
+print(HSC_score_spr, HSC_score_pr)
+
+perform_df=pd.DataFrame({'KLD': KLD_ls, 'W1':W1, "W2":W2, "S_score_g_spr":S_score_spr, "HSCscore_g_spr":HSC_score_spr})
 perform_df['timepoints'] = timepoints
 perform_df['datatype'] = ['observed' if i in timepoint_idx else 'imputed' for i,t in enumerate(timepoints) ]
 perform_df.to_csv(f"{result_dir}/{result_base}_perform.csv",index=False)
 
 KLD_fig, ax = vis_perform(KLD_ls, "KLD : true v.s. predicted density", kind='scatter')
+S_fig, ax = vis_perform(S_score_spr, "spr (S-score & g) ", kind='scatter')
+HSC_fig, ax = vis_perform(HSC_score_spr, "spr (HSC-score & g)", kind='scatter')
 W1_fig, ax = vis_perform(W1, "W1 distance", kind='bar')
 W2_fig, ax = vis_perform(W2, "W2 distance", kind='bar')
 
 savefig(KLD_fig, "KLD")
 savefig(W1_fig, "W1")
 savefig(W2_fig, "W2")
+
+
+def score_param_scatter(score_key, param, score_spr=None, ncol=6):
+
+    if score_spr is None:
+        score_spr, score_pr = tl.eval_funs.param_vs_score(adata, score_key, param)
+
+    fig, axs = plt.subplots(1, ncol, figsize=(int(3.5*ncol)+1,3), gridspec_kw= {"wspace":0.3})
+    for i, ax in enumerate(axs):
+        t = timepoints[i]
+        idx_t = adata.obs[timepoint_key] == t
+        ax.scatter(adata.obs[score_key][idx_t].values, param[i][idx_t], alpha=0.5)
+        ax.set_title("Day {} spr : {:.3f}".format(timepoints[i], score_spr[i]))
+        ax.set_xlabel(score_key)
+        ax.set_ylabel("")
+        sns.despine(ax=ax)
+    axs[0].set_ylabel(r"$\hat g$")
+
+    return fig, axs
+
+fig_S_scatter, axs = score_param_scatter('S_score', g_pred_ay, S_score_spr)
+fig_HSC_scatter, axs = score_param_scatter('HSCscore', g_pred_ay, HSC_score_spr)
+
+
+adata.obsm['g_param'] = g_pred_ay.T
+grouped_S = tl.reader_funs.get_pseudobulk(adata, 'S_score', pseudobulk_key='pseudo_bulk').flatten()
+grouped_g = tl.reader_funs.get_pseudobulk(adata, 'g_param', pseudobulk_key='pseudo_bulk')
+grouped_spr = [spearmanr(g, grouped_S)[0] for g in grouped_g.T]
+grouped_pr = [pearsonr(g, grouped_S)[0] for g in grouped_g.T]
 
 # add the density into obs
 cm_celltype = dict(zip(t7_ad.obs[ct_key].cat.categories ,t7_ad.uns[f'{ct_key}_colors']))
