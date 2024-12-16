@@ -672,7 +672,7 @@ class pde_u_free(pde_params):
         optim_class : str, the optimizer used
         D_penalty : float , default None the weight for penalizing D
         """
-        super().__init__(channels=channels, growth_weight=growth_weight, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
+        super().__init__(channels=channels, growth_weight=growth_weight, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight, time_scale_factor=time_scale_factor)
         self.save_hyperparameters()
         self.b1 = 35 / 384
         if step_size is None:

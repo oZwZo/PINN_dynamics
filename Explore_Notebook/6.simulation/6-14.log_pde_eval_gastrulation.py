@@ -20,14 +20,12 @@ from matplotlib.patches import Patch
 
 from matplotlib.backends.backend_pdf import PdfPages
 
-main_dir="/home/wergillius/Project/PINN_dynamics"
+main_dir="/ssd/users/Wergillius/Project/PINN_dynamics"
 os.chdir(main_dir)
-TM1=[0,1,2,3,4,6,8]
-TM2=[0,1,2,3,5]
-
+TM1=[0,1,2,4]
 # CHANGE THIS !!!!!
 
-ckpt_path = "logs/debugging/logrithmic_pde_tsense/lightning_logs/version_13/checkpoints/epoch=1-total_loss=8.22609520.ckpt"
+ckpt_path = "logs/log_gast_nTMAll_full/logrithmic_pde_tsense/lightning_logs/version_5/checkpoints/epoch=33-total_loss=4.70090246.ckpt"
 
 
 if __name__ == '__main__':
@@ -42,6 +40,7 @@ ct_key = 'anno_man'
 cuda = "2"
 cuda = "cuda:%s"%cuda if cuda.isdigit() else cuda
 fast_mode = False
+subsample = False
 
 
 # check result dir and create
@@ -71,16 +70,7 @@ adata = sc.read_h5ad(f"data/{data_name}.h5ad")
 timepoints = adata.uns['pop']['t']
 
 
-if "TM1" in ckpt_path:
-    timepoint_idx = TM1
-elif "TM2" in ckpt_path:
-    timepoint_idx = TM2 
-else:   
-    try:
-        timepoint_idx = eval(ckpt_path.split("/")[1].split("-")[1].split("_n")[1])
-        timepoint_idx = range(timepoint_idx) if isinstance(timepoint_idx, int) else timepoint_idx
-    except IndexError:
-        timepoint_idx = None
+timepoint_idx = TM1
 
 # detecting pre-computed duds
 duds_path = f"data/{data_name}_mellon_dloguds.npy"
@@ -91,14 +81,14 @@ else:
 
 
 # time-continous mellon
-if not os.path.exists(f"data/tom_pos_mellon_timecontinuous_predictor.json"):
+if not os.path.exists(f"data/{data_name}_mellon_timecontinuous_predictor.json"):
     X = adata.obsm[cellstate_key]
     X_times = adata.obs[timepoint_key].astype(int).apply(np.log)
     ls_time_estimate = 1.5 * np.mean(np.diff(np.log(timepoints)))
     t_est = mellon.TimeSensitiveDensityEstimator(d=2, ls_time=ls_time_estimate)
     # Fit the estimator to the data
     t_est.fit(X, X_times)
-    t_est.predict.to_json(f"data/tom_pos_mellon_timecontinuous_predictor.json") 
+    t_est.predict.to_json(f"data/{data_name}_mellon_timecontinuous_predictor.json") 
 
 t_pred = mellon.Predictor.from_json(f"data/{data_name}_mellon_timecontinuous_predictor.json")
 
@@ -113,26 +103,47 @@ for i, t in enumerate(adata.uns['pop']['t']):
 predictors= np.array(predictors)
 
 
+
 DataSet_class = reader.Duds_AnnDS_fastmode if fast_mode else reader.Duds_AnnDS
 fast_mode_args = {
-    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":600
+    "n_pseudobulk":None, "pseudobulk_key":'pseudo_bulk', "resolution":1000
 }
 fast_mode_args = fast_mode_args if fast_mode else {}
 
+if subsample:
+    adata_sub = sc.pp.subsample(adata, fraction=0.05, random_state=0, copy=True)
+    subset_index = [cb in adata_sub.obs_names for cb in adata.obs_names]
+    if precomputed_duds is not None:
+        precomputed_duds = precomputed_duds[:, subset_index,:]
+        adata_raw = adata.copy()
+        adata = adata_sub
+
 DS_full = DataSet_class(
-                            AnnData=adata, 
-                            timepoint_idx=None, 
-                            precomputed_duds=precomputed_duds,
-                            timepoint_key = timepoint_key,
-                            n_dimension = n_dimension,
-                            cellstate_key=cellstate_key,  #'DM_EigenVector'
-                            log_transform=True,
-                            norm_time='min_minus',
-                            deltax_key="Delta_DM",
-                            density_funs = predictors,
-                            # base_cellstate = base_cellstate,
-                            batchsize=100)
+                        AnnData=adata, 
+                        timepoint_idx=None, 
+                        precomputed_duds=precomputed_duds,
+                        timepoint_key = timepoint_key,
+                        n_dimension = n_dimension,
+                        cellstate_key=cellstate_key,  #'DM_EigenVector'
+                        log_transform=True,
+                        norm_time='min_minus',
+                        deltax_key="Delta_DM",
+                        density_funs = predictors,
+                        # base_cellstate = base_cellstate,
+                        batchsize=100)
 pde_model.log_transform = True
+
+if fast_mode:
+    bulk_ad = sc.AnnData(
+        X = DS_full.cellstate,
+        var = ["DM_%d"%i for i in range(n_dimension)],
+        obs = DS_full.adata.obs['pseudo_bulk'].unique()
+    )
+    bulk_ad.obsm[cellstate_key] = bulk_ad.X
+    bulk_ad.obsm['X_umap'] = tl.get_pseudobulk(adata, 'X_umap_paper')
+
+    adata.obs.groupby('pseudo_bulk')
+
 # adata
 t7_ad = DS_full.adata.copy()
 duds = DS_full.duds.copy()
@@ -147,15 +158,9 @@ retest_u_clip = np.stack([p(DS_full.cellstate) for p in predictors])
 PINN.pl.params_in_umap(adata, retest_u_clip, cell_of_t=False)
 
 
-duds_path = f"data/tom_neg_duds.npy"
-if os.path.exists(duds_path):
-    precomputed_duds_neg = np.load(duds_path)
-else:
-    precomputed_duds_neg = None
-
 
 DM_range = (cellstate.max(axis=0).values - cellstate.min(axis=0).values).cpu().numpy()
-
+DM_range = np.where(DM_range==0, 1, DM_range)
 # FORWARD 
 u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay = tl.forward_get_params(pde_model, DS_full)
 
@@ -193,8 +198,10 @@ savefig(fig_v2, "v_norm")
 
 # short-term 
 
-out_int_all = PINN.tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=timepoints, return_all=True)
+out_int_all = PINN.tl.density_shortterm_simulation(pde_model, DS_full, timepoint_idx, timepoints=(timepoints-timepoints[0])/pde_model.time_scale_factor, return_all=True)
 u_int_all = out_int_all[0]
+
+u_int_all = np.concatenate([u_b[[0]], u_int_all])
 print(np.exp(u_b).sum(axis=1))
 print(np.exp(u_int_all).sum(axis=1))
 
@@ -204,14 +211,17 @@ siml_u_clipped = np.clip(u_int_all, a_min=thres[0], a_max=thres[1])
 imputed_t_idx = [i for i, t in enumerate(timepoints) if i not in timepoint_idx]
 
 
-fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b[timepoint_idx], timepoints=timepoints[timepoint_idx], param='\nlog10 observed density', cell_of_t=True);
-fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all[timepoint_idx],timepoints=timepoints[timepoint_idx], param='\nlog10 simulated density', cell_of_t=True);
+fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b[timepoint_idx], timepoints=timepoints[timepoint_idx], param='\nlog observed density', cell_of_t=True);
+fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all[timepoint_idx],timepoints=timepoints[timepoint_idx], param='\nlog simulated density', cell_of_t=True);
 savefig(fig_obs, "Taining_Timpoint_observed_density")
 savefig(fig_int1, "Taining_Timpoint_simulated_density")
 
+fig_obs, axs = PINN.pl.params_in_umap(t7_ad, u_b, timepoints=timepoints, param='\nlog observed density', cell_of_t=False);
+fig_int1, axs = PINN.pl.params_in_umap(t7_ad, u_int_all,timepoints=timepoints, param='\nlog simulated density', cell_of_t=False);
+
 if len(imputed_t_idx) > 0:
-    fig_obs2, axs = PINN.pl.params_in_umap(t7_ad, u_b[imputed_t_idx], timepoints=timepoints[imputed_t_idx], param='\nlog10 observed density', cell_of_t=True);
-    fig_int2, axs = PINN.pl.params_in_umap(t7_ad, u_int_all[imputed_t_idx],timepoints=timepoints[imputed_t_idx], param='\nlog10 simulated density', cell_of_t=True);
+    fig_obs2, axs = PINN.pl.params_in_umap(t7_ad, u_b[imputed_t_idx], timepoints=timepoints[imputed_t_idx], param='\nlog observed density', cell_of_t=True);
+    fig_int2, axs = PINN.pl.params_in_umap(t7_ad, u_int_all[imputed_t_idx],timepoints=timepoints[imputed_t_idx], param='\nlog simulated density', cell_of_t=True);
     savefig(fig_obs2, "Imputed_Timpoint_observed_density")
     savefig(fig_int2, "Imputed_Timpoint_simulated_density")
 
