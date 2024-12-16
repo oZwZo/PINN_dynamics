@@ -51,8 +51,13 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subp
     fig,axs = plt.subplots(1, n_timepoints, **subplot_kws)
     # axs = axs.flatten()
     axis_j = 0
-
-    umap_kws = {"alpha":0.7, "color_map":'viridis'}
+    
+    default_umap_kws = {"alpha":0.7, "color_map":'viridis', "s":50}
+    if umap_kws is None:
+        umap_kws = default_umap_kws
+    else:
+        default_umap_kws.update(umap_kws)
+        umap_kws = default_umap_kws
 
     timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
     for t in timepoints:

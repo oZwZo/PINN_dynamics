@@ -108,11 +108,17 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
 
     all_output = []
     chunk_size= 1000
-    t_list = timepoints/ timepoints[0] / pde_model.time_scale_factor
+    if timepoints[0] == 0:
+        # mean minus
+        t_list = timepoints
+    else:
+        t_list = timepoints/ timepoints[0] / pde_model.time_scale_factor
 
     for it, itp1 in tqdm(zip(timepoint_idx[:-1], timepoint_idx[1:])):
 
         out_t = []
+
+        print(it, "to", itp1)
 
         for i in range(0, len(cellstate), chunk_size):
 
