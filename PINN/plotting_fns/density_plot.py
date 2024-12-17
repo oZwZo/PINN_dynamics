@@ -243,8 +243,9 @@ def celltype_proportion(p_celltype_melt, timepoints, cm_celltype, ct_key, densit
     """
     cell type proportion 
     """
+    height = len(cm_celltype) * 0.35
     n_timepoint = len(timepoints)
-    fig_subplot, axs = plt.subplots(1, n_timepoint, figsize=(3*n_timepoint, 6), dpi=300, sharey=True)
+    fig_subplot, axs = plt.subplots(1, n_timepoint, figsize=(3*n_timepoint, height), dpi=300, sharey=True)
 
     for i, t in enumerate(timepoints):
         t = str(t)

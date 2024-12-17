@@ -118,7 +118,7 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
 
         out_t = []
 
-        print(it, "to", itp1)
+        print("simulating from timepoint", t_list[it], "to", t_list[itp1])
 
         for i in range(0, len(cellstate), chunk_size):
 

@@ -95,7 +95,7 @@ class pde_params_base(pl.LightningModule):
         """
         sum_diag = 0.
         for i in range(s.shape[1]):
-            sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True , allow_unused=True)[0] .contiguous()[:, i].contiguous()
+            sum_diag += torch.autograd.grad(f[:, i].sum(), s, create_graph=True , allow_unused=True)[0].contiguous()[:, i].contiguous()
 
         return sum_diag.contiguous()
 
@@ -118,7 +118,9 @@ class pde_params_base(pl.LightningModule):
             prod = prod.sum(dim=1)
 
         return prod
-        
+
+    def gradient_of(self, out, variable):
+        return torch.autograd.grad(out, variable, create_graph=True, allow_unused=True)[0] 
 
     def equation(self, s, t) -> tuple:
         """
@@ -135,11 +137,11 @@ class pde_params_base(pl.LightningModule):
         g = self.g(s,t)
         
         # left : ∂u/∂t
-        dudt = torch.autograd.grad(u.sum(), t, create_graph=True , allow_unused=True)[0] 
+        dudt = self.gradient_of(u.sum(), t) 
         
         
         # the first order deviritives of density u to time : ∂u/∂s
-        duds = torch.autograd.grad(u.sum(), s, create_graph=True , allow_unused=True)[0] 
+        duds = self.gradient_of(u.sum(), s) 
         
         # the first term:  a second order derivative
         Du = self.mul(D, duds)   # element-wise 
@@ -148,19 +150,19 @@ class pde_params_base(pl.LightningModule):
         if len(Du.shape) == 1: # for one trajectory system
             # the second order deviritives of density u to cell state : ∂^2u/∂s^2
             #  ∂/∂s (D*∂u/∂s)
-            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True , allow_unused=True)[0]  
+            d2Dds2 = self.gradient_of(Du.sum(), s)  
 
         else:   # for multi-dimensiona data
             # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
             d2Dds2_ls  = []
             for i in range(v.shape[1]):
-                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True , allow_unused=True)[0] [:, i:i+1]
+                du_dsisi = self.gradient_of(Du[:,i].sum(), s)[:, i:i+1]
                 d2Dds2_ls.append(du_dsisi)
             d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
         
         # the second term : ∂/∂s[ v*u ]
         vu = self.mul(v, u)
-        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True , allow_unused=True)[0]  
+        dvuds = self.gradient_of(vu.sum(), s)  
         
         # right hand side
         diffuse = d2Dds2.sum(dim=1)
@@ -388,7 +390,7 @@ class pde_params(pde_params_base):
 
         self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
         self.growth_weight = 0.1 if growth_weight is None else growth_weight
-        
+        self.log_transform = False
        
         MLP_Module = MLP_surrogate
         # u_theta, density function
@@ -439,7 +441,9 @@ class pde_params(pde_params_base):
             # set ds to zeros to fix cellstates
             ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
 
-        return (dudt, ds)
+            duds_by_time = ds  #self.gradient_of(dudt.sum(), s)
+
+        return dudt, ds, duds_by_time, growth, drift, diffuse
 
 
     def training_step(self, train_batch, index):
@@ -455,8 +459,12 @@ class pde_params(pde_params_base):
 
 
         # loss 1 : boundary loss
-        log_u_pred = self.u(s,t)
-        log_utp1_pred = self.u(s,tp1)
+        with torch.set_grad_enabled(True):
+            s.requires_grad_(True)
+            log_u_pred = self.u(s,t)
+            log_utp1_pred = self.u(s,tp1)
+            # duds_init = self.gradient_of(torch.exp(log_u_pred).sum(), s)
+            # duds_tp1 = self.gradient_of(torch.exp(log_utp1_pred).sum(), s)
 
         # boundary u of the current timepoint
         ub_loss = self.loss_fn(ut.squeeze(), (torch.exp(log_u_pred).squeeze()))
@@ -467,12 +475,15 @@ class pde_params(pde_params_base):
         # loss 2 : dynamics 
 
         # init_condition 
-        init_condition = (ut, s)
+        zeros = torch.zeros_like(ut)
+        duds_init = torch.zeros_like(s)
+        init_condition = (ut, s, duds_init, zeros.clone(), zeros.clone(), zeros.clone())
+
         step_size = np.around((t1 - t0)/15, decimals=1).item() 
         step_size = step_size if step_size > 0 else 0.05
         step_size = min(step_size, 0.4)
 
-        u_int, s_t = odeint_adjoint(
+        u_int, s_t, duds, growth, drift, diffuse = odeint_adjoint(
                         self,
                         y0 = init_condition,
                         t = torch.tensor([t0, t1]).type(torch.float32).to(device),
@@ -491,13 +502,27 @@ class pde_params(pde_params_base):
         D_norm = self.restrict_D(s, t, exp=False)
         v_loss = self.constrain_v(s,t,deltax)
 
-        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss 
+        
+        # duds_loss = -1 * nn.functional.cosine_similarity(duds[-1], duds_tp1)
+
+                
+        if self.log_transform:
+            left = torch.exp(utp1).sum()
+            right = torch.exp(ut + growth[-1]).sum()
+            growth_loss = self.loss_fn(torch.log(left), torch.log(right))
+        else:
+            mass_gain = utp1.sum() -  ut.sum()
+            predicted_gain = growth[-1].sum()
+            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=1) 
+        # growth_loss = torch.Tensor([0]).to(device)
+
+        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + growth_loss
 
 
         with torch.no_grad():
             # self.log("residual_loss", Loss_r, on_epoch=True)
             # self.log("boundary_loss", Loss_b, on_epoch=True)
-            # self.log("population_loss", Loss_p, on_epoch=True)
+            self.log("population_loss", growth_loss.item(), on_epoch=True)
             
             self.log("boundary_loss", ub_loss.item(),  on_epoch=True)
             self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
@@ -717,7 +742,7 @@ class pde_u_free(pde_params):
             # set ds to zeros to fix cellstates
             ds = torch.zeros_like(s).float().to(device).requires_grad_(True)
             
-            duds_by_time = torch.autograd.grad(dudt.sum(), s, create_graph=True , allow_unused=True)[0]  
+            duds_by_time = self.gradient_of(dudt.sum(), s)
 
         return (dudt, ds, duds_by_time, growth, drift, diffuse)
 
@@ -745,19 +770,19 @@ class pde_u_free(pde_params):
         if len(Du.shape) == 1: # for one trajectory system
             # the second order deviritives of density u to cell state : ∂^2u/∂s^2
             #  ∂/∂s (D*∂u/∂s)
-            d2Dds2 = torch.autograd.grad(Du.sum(), s, create_graph=True , allow_unused=True)[0]  
+            d2Dds2 = self.gradient_of(Du.sum(), s)
 
         else:   # for multi-dimensiona data
             # u_ss is different for multi dimension : ∂2u / ∂s_is_i 
             d2Dds2_ls  = []
             for i in range(v.shape[1]):
-                du_dsisi = torch.autograd.grad(Du[:,i].sum(), s, create_graph=True , allow_unused=True)[0] [:, i:i+1]
+                du_dsisi = self.gradient_of(Du[:,i].sum(), s)[:, i:i+1]
                 d2Dds2_ls.append(du_dsisi)
             d2Dds2 = torch.cat(d2Dds2_ls, dim=1)
         
         # the second term : ∂/∂s[ v*u ]
         vu = self.mul(v, u)
-        dvuds = torch.autograd.grad(vu.sum(), s, create_graph=True , allow_unused=True)[0]  
+        dvuds = self.gradient_of(vu.sum(), s)
         
         # right hand side
         diffuse = d2Dds2.sum(dim=1)
@@ -765,8 +790,8 @@ class pde_u_free(pde_params):
         growth = torch.mul(g, u)
 
         if torch.isnan(diffuse).any():
-            dudss = torch.autograd.grad(duds.sum(), s, create_graph=True , allow_unused=True)[0]  
-            dDds = torch.autograd.grad(D.sum(), s, create_graph=True , allow_unused=True)[0]  
+            dudss = self.gradient_of(duds.sum(), s)
+            dDds = self.gradient_of(D.sum(), s)
             if torch.isnan(dudss).any():
                 diffuse = self.mul(dDds, duds)
             else:
@@ -877,11 +902,11 @@ class logrithmic_pde(pde_u_free):
         g = self.g(s,t)
 
         # first-order derivative
-        dvds = torch.autograd.grad(v.sum(), s, create_graph=True , allow_unused=True)[0] 
-        dDds = torch.autograd.grad(D.sum(), s, create_graph=True , allow_unused=True)[0] 
+        dvds = self.gradient_of(v.sum(), s)
+        dDds = self.gradient_of(D.sum(), s)
 
         # second-order derivative
-        dlogudss = torch.autograd.grad(dloguds.sum(), s, create_graph=True , allow_unused=True)[0] 
+        dlogudss = self.gradient_of(dloguds.sum(), s)
         if dlogudss is None:
             dlogudss = dloguds # becomes a scaler
 
@@ -900,7 +925,7 @@ class logrithmic_pde(pde_u_free):
         # Dudloguds = self.mul(Du, dloguds)
 
         # # second order derivatives
-        # ddDdss = torch.autograd.grad(Dudloguds.sum(), s, create_graph=True , allow_unused=True)[0].sum(dim=1)
+        # ddDdss = self.gradient_of(Dudloguds.sum(), s).sum(dim=1)
         # diffusion = torch.div(ddDdss, u)
         
         return None, growth, drift, diffusion
