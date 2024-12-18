@@ -513,7 +513,7 @@ class pde_params(pde_params_base):
         else:
             mass_gain = utp1.sum() -  ut.sum()
             predicted_gain = growth[-1].sum()
-            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=1) 
+            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
         # growth_loss = torch.Tensor([0]).to(device)
 
         total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + growth_loss

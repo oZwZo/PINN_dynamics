@@ -29,6 +29,7 @@ parser.add_argument("-K", "--cellstate_key", type=str, required=False, default="
 parser.add_argument("-M", "--model", type=str, required=False, default="pde_params", help='the model class, defined in models.py')
 parser.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 parser.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
+parser.add_argument("-L",  "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
 parser.add_argument("--lr", type=float, required=False, default=3e-4, help='the learning rate for training the model')
 parser.add_argument("--schedule_lr", type=str, required=False, default="CyclicLR", help='LambdaLR if passing a lambda expression, else StepLR')
 parser.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
@@ -41,7 +42,10 @@ parser.add_argument("--D_penalty", type=float, required=False, default=None, hel
 parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
 parser.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
 parser.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
+parser.add_argument("--time_scale_factor", type=float, required=False, default=5, help='the scale the time for ode')
+parser.add_argument("--norm_time", type=str, required=False, default=False, help='Ways to normlize the timepoint, [False, min_minus, log, none]')
 parser.add_argument("--time_sensitive", action="store_true", required=False, help='Whether to include time in behavoir functions')
+parser.add_argument("--progress_bar", type=str, required=False, default="True", help='whether show progress bar on screen, boolen value, default True')
 args = parser.parse_args()
 
 # args = parser.parse_args([
@@ -99,6 +103,7 @@ model = model_class(
         D_penalty = args.D_penalty, 
         deltax_weight = args.deltax_weight,
         weight_intensity = args.weight_intensity,
+        time_scale_factor = args.time_scale_factor,
         **model_kws
     )
 
@@ -124,7 +129,7 @@ train_DS = reader.TwoTimpepoint_AnnDS(
                             n_dimension = args.n_dimension,
                             cellstate_key=args.cellstate_key,  #'DM_EigenVector'
                             log_transform=False,
-                            norm_time=False,
+                            norm_time=args.norm_time,
                             deltax_key=args.deltax_key,
                             batchsize=args.batch_size)
 
@@ -152,7 +157,7 @@ gpu_device = args.gpu_devices
 
 trainer = pl.Trainer(
                     #auto_lr_find=True,
-                    enable_progress_bar=False,
+                    enable_progress_bar=args.progress_bar,
                     accelerator=device,
                     # fast_dev_run=True,
                     # gradient_clip_val=0.5,
