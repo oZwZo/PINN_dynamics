@@ -10,10 +10,10 @@ from typing import Any, Union, Callable
 
 class MLP_surrogate(nn.Module):
     
-    def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish'):
+    def __init__(self, channels:list = [2, 32, 32, 1], activation_fn:Union[str, list] = 'Mish', time_sensitive=True):
 
         super().__init__()
-        self.time_sensitive = True # default 
+        self.time_sensitive = time_sensitive # default 
 
         ### activation function check
 

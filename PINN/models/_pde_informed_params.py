@@ -322,41 +322,46 @@ class pde_params_base(pl.LightningModule):
         
         return L_kld.mean()
 
-    def predict_param(self, DataSet, param='g'):    
+    def predict_param(self, train_DS, device=None):    
         r"""
         Given a DataSet Class, predict the param 
         """
-        device = next(self.u.parameters()).device
+        if device is None:
+            device = next(self.parameters()).device
 
-        cellstate_only = (self.time_sensitive == False) and (param != 'u')
-        
-        # get cell states and their paired timepoints
-        if cellstate_only:
-            # cellstate is [n_cell, n_dim]
-            s_all = torch.from_numpy(DataSet.cellstate).float().requires_grad_()
-        else:
-            # s is [n_time * n_cell , n_dim]
-            s_all = DataSet.s.float().requires_grad_()
-            
+        # some variables
+        n_timepoint = len(train_DS.T_b)
+        v_dim = self.v.u_theta[-1].out_features
+        D_dim = self.D.u_theta[-1].out_features
 
-        t_b = DataSet.t_b.float().requires_grad_()
+        s_ts = train_DS.s.float().to(device)
+        t_ts = train_DS.t_b.float().to(device)
+        chunk_size = 5000
 
-        # get the behavior function
-        sub_module = self.__getattr__(param)
-        param_pred = sub_module(s_all.to(device), t_b.to(device))
+        u_pred_ls = []
+        v_ls = []
+        D_ls = []
+        g_ls = []
 
-        if (len(param_pred.shape) != 1) and (param_pred.shape[1] == DataSet.n_dimension):
-            param_pred = self.trace_div(param_pred, s_all)
+        with torch.no_grad():
+            for i in range(0, len(t_ts), chunk_size):                              
+                s_in = s_ts[i:i+chunk_size]
+                t_in = t_ts[i:i+chunk_size]
 
-            
-        if cellstate_only:
-            param_pred = param_pred.detach().cpu().numpy()
-        else:
-            n_timepoint = len(DataSet.popD['t'])
-            param_pred = param_pred.detach().cpu().numpy().reshape(n_timepoint, -1)
+                v_pred = self.v(s_in, t_in)
+                g_pred = self.g(s_in, t_in)
+                D_pred = self.D(s_in, t_in)
+                
+                v_ls.append(v_pred.detach().cpu().numpy())
+                g_ls.append(g_pred.detach().cpu().numpy())
+                D_ls.append(D_pred.detach().cpu().numpy())
 
 
-        return param_pred
+        v_pred_ay = np.concatenate(v_ls, axis=0).reshape(n_timepoint, -1, v_dim) / self.time_scale_factor
+        g_pred_ay = np.concatenate(g_ls, axis=0).reshape(n_timepoint,-1) / self.time_scale_factor
+        D_pred_ay = np.concatenate(D_ls, axis=0).reshape(n_timepoint, -1, D_dim).squeeze() / self.time_scale_factor
+
+        return v_pred_ay, g_pred_ay, D_pred_ay
 
 
 class pde_params(pde_params_base):
@@ -394,22 +399,22 @@ class pde_params(pde_params_base):
        
         MLP_Module = MLP_surrogate
         # u_theta, density function
-        self.u = MLP_surrogate(channels = channels, activation_fn=activation_fn)
+        self.u = MLP_surrogate(channels = channels, activation_fn=activation_fn, time_sensitive=True)
 
         # the output for growth is always 1
         if g_channels  is None:
-            g_channels = channels + [1]
-        self.g = MLP_Module(channels = g_channels, activation_fn=activation_fn)
+            g_channels = channels[:-1] + [1]
+        self.g = MLP_Module(channels = g_channels, activation_fn=activation_fn, time_sensitive=time_sensitive)
 
         # if we choose to collapse v, that means the parameter is the same for all dimension
         if v_channels is None:
-            v_channels = channels + [1] if collapse_v else channels + [self.n_dim]
-        self.v = MLP_Module(channels = v_channels, activation_fn=activation_fn)
+            v_channels = channels[:-1] + [1] if collapse_v else channels[:-1] + [self.n_dim]
+        self.v = MLP_Module(channels = v_channels, activation_fn=activation_fn, time_sensitive=time_sensitive)
 
         # if we choose to collapse D, that means the parameter is the same for all dimension
         if D_channels is None:
-            D_channels = channels + [1] if collapse_D else channels + [self.n_dim]
-        self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn)
+            D_channels = channels[:-1] + [1] if collapse_D else channels[:-1] + [self.n_dim]
+        self.D = MLP_Module(channels = D_channels, activation_fn=activation_fn, time_sensitive=time_sensitive)
 
     def get_u(self, s, t):
         logu = self.u(s, t) 

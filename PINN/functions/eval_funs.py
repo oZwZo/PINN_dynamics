@@ -102,8 +102,13 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
     if timepoint_idx is None:
         timepoint_idx = np.arange(len(timepoints))
     
-    duds = DataSet.duds.copy()
     u_b = DataSet.u_b.cpu().numpy().reshape(DataSet.T_b.shape[0], -1)
+
+    if 'duds' in dir(DataSet):
+        duds = DataSet.duds.copy()
+    else:
+        duds = np.zeros((u_b.shape[0], u_b.shape[1], cellstate.shape[1]))
+    
 
 
     all_output = []
@@ -127,7 +132,8 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
             duds_0 = torch.from_numpy(duds[it, i:i+chunk_size, :]).float().to(device).requires_grad_()
             
             y_0 = torch.zeros_like(tompos_u0)
-            init_condition = (tompos_u0, s0) if model_name == 'pde_params' else (tompos_u0, s0, duds_0, y_0.clone(), y_0.clone(), y_0.clone())
+            # init_condition = (tompos_u0, s0) if model_name == 'pde_params' else (tompos_u0, s0, duds_0, y_0.clone(), y_0.clone(), y_0.clone())
+            init_condition = (tompos_u0, s0, duds_0, y_0.clone(), y_0.clone(), y_0.clone())
 
             int_out_raw = odeint(
                             pde_model,
