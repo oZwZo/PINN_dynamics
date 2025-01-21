@@ -61,16 +61,21 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subp
 
     timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
     for t in timepoints:
+        if len(timepoints) == 1:
+            ax = axs
+        else:
+            ax = axs[axis_j]
+
         cbs = anndata.obs.query(f'`{timepoint_key}` == @t').index
 
         col = attribute(t) if isinstance(attribute, Callable) else attribute
         title = col if isinstance(attribute, Callable) else attribute+' d%d'%t
 
-        sc.pl.umap(anndata, show=False, return_fig=False,  ax=axs[axis_j], alpha=0.5, s=50,frameon=False);
+        sc.pl.umap(anndata, show=False, return_fig=False,  ax=ax, alpha=0.5, s=50,frameon=False);
 
         ad_t = anndata[cbs] if cell_of_t else anndata
         sc.pl.umap(ad_t, color=col,  
-                return_fig=False,show=False, ax=axs[axis_j], frameon=False, 
+                return_fig=False,show=False, ax=ax, frameon=False, 
                 title=title, **umap_kws);
         
         axis_j += 1

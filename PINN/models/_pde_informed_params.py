@@ -363,6 +363,47 @@ class pde_params_base(pl.LightningModule):
 
         return v_pred_ay, g_pred_ay, D_pred_ay
 
+    def density_transfer(self, t, states):
+        """
+        states : initial with s and u of the last timepoint
+        """
+        s = states[0]
+        u = states[1]
+        s_n = states[2]
+        u_n = states[3]
+        device = s.device
+        batch = s.shape[0]
+
+        with torch.set_grad_enabled(True):
+            s_t = s.clone().float().requires_grad_(True)   # get original s at t
+            u_stn1 = u.clone().float().requires_grad_(True)
+            s_next = s_n.clone().float().requires_grad_(True)   # get evolved s at t+1
+            u_next = u_n.clone().float().requires_grad_(True)
+            
+            # get the params of the evolved s and t
+            t_in = torch.full((batch,1), t.item()*self.time_scale_factor)
+            t_in = t_in.to(device).requires_grad_(True)
+
+            u_t = self.get_u(s_t, t_in)
+            g_t = self.g(s_t, t_in)
+            v_t = self.v(s_t, t_in)
+
+            
+            # The drift is sensing the global duds
+            vu = self.mul(u_t, v_t)
+            growth_local = g_t * u_stn1
+            u_stn1 += growth_local
+            # global_drift = self.gradient_of(vu.sum(), s_t) 
+            global_drift = torch.autograd.grad(
+                vu.sum(), s_t, create_graph=True, allow_unused=True)[0]
+
+            # the amout of mass flowing with the global drift
+            drift = torch.mul(global_drift.sum(dim=1) , torch.div(u_stn1,u_t))
+            
+            du = drift + self.g(s_next, t_in) * u_next
+            ds = torch.zeros_like(s_t)       # assume cs doesn't change
+            u_non = torch.zeros_like(u_stn1) # empty density
+            return (ds, growth_local-drift, ds, du)
 
 class pde_params(pde_params_base):
     def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
