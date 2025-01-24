@@ -496,6 +496,59 @@ class Duds_AnnDS_fastmode(Duds_AnnDS):
         if self.duds.shape[0] != self.T_b.shape[0]:
             self.duds = self.duds[self.pop_idx]
 
+class Syn_DS(Dataset):
+
+    def __init__(self, cellstate, density, integrate_time, deltax=None, batchsize=200):
+        r"""
+        Synthsized data. The data is not time sensitive.
+        Each time we will sample a batch of cells of the same timepoint
+
+        Augments
+        --------
+        cellstate : Tensor, [n_cell, n_dimension], the cellstate space
+        density : Tensor, [n_time, n_cell] the cellular density
+        integrate_time : Tensor, [n_time, ] the timepoints that are observed
+        deltax : Tensor, [n_time,] the different of s sampled
+        batchsize : int
+
+
+        Returns
+        -------
+        s, t, t_p1, u_t, u_tp1, deltax
+        """
+        super().__init__()
+
+        self.cellstate = cellstate
+        self.u_b = density
+        self.deltax = torch.zeros_like(cellstate) if deltax is None else deltax
+        self.T_b = integrate_time
+
+        self.batchsize = batchsize
+        self.n_time = len(integrate_time)
+
+    def __len__(self):
+        return self.cellstate.shape[0] * self.n_time //self.batchsize
+
+    def __getitem__(self, i):
+
+        i_t = np.random.randint(0, self.n_time-1)  # the i^th timepoint index
+        i_tp1 = i_t + 1 
+        # sample cellstates
+        s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
+
+        s = self.cellstate[s_index].float()
+
+        t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
+        t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
+
+        # the density of two consecutive 
+        u_t = self.u_b[i_t, s_index]
+        u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
+
+        deltax = self.deltax[s_index].float()
+
+        return s, t, t_p1, u_t, u_tp1, deltax
+
                                 ################################
                                 ## Trajectory Dependent  DS   ##
                                 ################################

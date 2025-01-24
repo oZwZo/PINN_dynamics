@@ -406,7 +406,7 @@ class pde_params_base(pl.LightningModule):
             return (ds, growth_local-drift, ds, du)
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None):
+    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
         r"""
         mlp u theta
 
@@ -437,6 +437,7 @@ class pde_params(pde_params_base):
         self.n_dim = channels[0] - 1 if time_sensitive  else channels[0]
         self.growth_weight = 0.1 if growth_weight is None else growth_weight
         self.log_transform = False
+        
        
         MLP_Module = MLP_surrogate
         # u_theta, density function
@@ -562,7 +563,7 @@ class pde_params(pde_params_base):
             growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
         # growth_loss = torch.Tensor([0]).to(device)
 
-        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + growth_loss
+        total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + self.growth_weight * growth_loss
 
 
         with torch.no_grad():
@@ -580,50 +581,9 @@ class pde_params(pde_params_base):
 
 
     def validation_step(self, val_batch, index):
-
-        # cellstate, t, t+1, u_t, u_{t+1}
-        s, t, tp1, ut, utp1 = val_batch
-        device = s.device
-
-        u_pred = self.model(s,t)
-
-        # boundary u of the current timepoint
-        ub_loss = self.loss_fn(ut.squeeze(), u_pred.squeeze())
-        
-        step_size = np.around((tp1-t)/15, decimals=1).item() 
-        step_size = step_size if step_size > 0 else 0.05
-        step_size = min(step_size, 0.4)
-
-        init_condition = (ut, s)
-        # u_int, s_t = odeint_adjoint(
-        #                 self,
-        #                 y0 = init_condition,
-        #                 t = torch.tensor([t, tp1]).type(torch.float32).to(device),
-        #                 atol=self.ode_tol,
-        #                 rtol=self.ode_tol,
-        #                 method='dopri5',
-        #                 adjoint_options={'norm':'seminorm'},
-        #             )
-        u_int, s_t = odeint(
-                        self.ode_func,
-                        init_condition,
-                        torch.tensor([t, tp1]).type(torch.float32).to(device),
-                        atol=1e-5,
-                        rtol=1e-5,
-                        method='midpoint',
-                        options = {'step_size': step_size}
-                    )
-
-
-        # boundary u of  the next timepoint
-        utp1_loss = self.loss_fn(u_int[-1], utp1)
-        
-        total_loss = ub_loss + utp1_loss
-        
-        self.log_dict(
-            {"boundary_loss":ub_loss,
-             "integrat_loss":utp1_loss,
-             "total_loss":total_loss})
+        loss = self.training_step(val_batch, index)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
+        return loss
 
     def stratified_ode(self, t, states):
         """

@@ -108,10 +108,13 @@ class MultiDim_CubicSpline(nn.Module):
         # Splines = []
         self.Splines = nn.ModuleList([])
         for d2 in range(y.shape[1]):
-            self.Splines.append(CubicSpline(y=y[:,d2], x=x, n_knot=y.shape[0]))
+            self.Splines.append(CubicSpline(y=y[:,d2], x=x[:,d2], n_knot=y.shape[0]))
 
         if collapse:
             self.fc_out = nn.Linear(y.shape[1], 1, bias=False)
+            weight = self.fc_out.weight
+            n_in = self.fc_out.in_features
+            self.fc_out.weight = nn.Parameter(torch.ones((1, n_in))).float()
         
     
     def forward(self, xs, t=None)->torch.Tensor:
