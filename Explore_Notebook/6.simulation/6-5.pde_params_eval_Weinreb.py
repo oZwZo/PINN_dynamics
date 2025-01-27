@@ -19,10 +19,11 @@ from matplotlib.patches import Patch
 
 from matplotlib.backends.backend_pdf import PdfPages
 
-os.chdir("/home/wergillius/Project/PINN_dynamics")
+os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
 
 
-ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n[0, 2]/pde_params_tsense/lightning_logs/version_0/checkpoints/epoch=77-total_loss=0.13398665.ckpt"
+# ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n[0, 2]/pde_params_tsense/lightning_logs/version_0/checkpoints/epoch=77-total_loss=0.13398665.ckpt"
+ckpt_path = "logs/klein_subset-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_6/checkpoints/epoch=34-total_loss=0.22123769.ckpt"
 # ckpt_path = "logs/Weinreb_clone2-DM_EigenVectors_multiscaled_n3/pde_params_tsense/lightning_logs/version_1/checkpoints/epoch=191-total_loss=3.19271231.ckpt"
 if __name__ == '__main__':
     ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
