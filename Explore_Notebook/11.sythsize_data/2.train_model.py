@@ -1,4 +1,5 @@
 import os,sys
+import yaml
 import torch
 import numpy as np
 import pandas as pd 
@@ -10,7 +11,7 @@ import pytorch_lightning as pl
 os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
 
 
-log_dir = "logs/5Dim_ncs_syn_Jan23_0-4_time"
+log_dir = "logs/5Dim_ncs_syn_Jan23_0-4_time_longer"
 
 
 def check_existing_version(log_dir = log_dir):
@@ -49,10 +50,10 @@ ds = syn_result_ckpt['delta_x']
 
 
 dataset_kws = dict(
-    seen_timepoints = [0, 1, 2, 4, 6, 8],
-    leaveout_timepoints = [3,7,10],
-    test_timepoitns = [5,9],
-    batchsize = 256
+    seen_timepoints = [0, 1, 2, 4, 6, 8,10],
+    leaveout_timepoints = [5,7],
+    test_timepoitns = [3,9],
+    batchsize = 128
 )
 
 train_DS = reader.Syn_DS(cellstate=cellstate, 
@@ -79,17 +80,15 @@ model_kws = dict(
     D_channels = [6, 32, 1],
     activation_fn='Tanh',
     ode_tol = 1e-4,
-    D_penalty = 0.5,
+    D_penalty = 0.1,
     deltax_weight = 1,
-    weight_intensity = 1,
+    weight_intensity = 3,
     time_scale_factor = 1,
     time_sensitive = True,
     growth_weight = 3,
 )
 model = models.pde_params(**model_kws)
 
-
-import yaml
 
 config = model_kws
 config.update(dataset_kws)
@@ -108,7 +107,7 @@ trainer = pl.Trainer(
                     auto_lr_find=True,
                     accelerator='gpu',
                     default_root_dir=log_dir,
-                    devices = [2], 
+                    devices = [3], 
                     max_epochs=300,
                     callbacks=[pl.callbacks.ModelCheckpoint(
                                 filename='{epoch}-{val_loss:.8f}',
