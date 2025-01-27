@@ -36,8 +36,9 @@ parser.add_argument("--n_grid", type=int, required=False, default=300, help='the
 parser.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
 parser.add_argument("--timepoint_idx", type=str, required=False, default=None, help='the number of time point to train the model')
 parser.add_argument("--batch_size", type=int, required=False, default=200, help='the number of nearby cell state to include within a minibatch')
+parser.add_argument("--bw", type=float, required=False, default=None, help='the band width parameter , pass to bw_method for gaussian_kde')
 parser.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
-parser.add_argument("--channels", type=str, required=False, default="3,32,32,1", help='the depth and width of the model')
+parser.add_argument("--channels", type=str, required=False, default="32,32", help='the depth and width of the hidden layers')
 parser.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
 parser.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
 parser.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
@@ -70,7 +71,7 @@ else:
 adata = sc.read_h5ad(h5_path)
 
 if args.timepoint_idx is None:
-    timepoint_idx = adata.uns['pop']['t'][-1]
+    timepoint_idx = len(adata.uns['pop']['t'])
 else:
     timepoint_idx = eval(args.timepoint_idx)
 
@@ -83,15 +84,16 @@ if not os.path.exists(save_path):
 
 # define model
 model_class = eval(f"models.{args.model}")
-channels = [int(c) for c in args.channels.split(",")]   
+hidden_channels = [int(c) for c in args.channels.split(",")]   
 
 # for g v and D
 if args.model == "pde_params": 
     n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
-    max_h = max(channels)
-    model_kws = dict(v_channels = [n_dim, max_h, 32, args.n_dimension],
-                    g_channels = [n_dim, max_h,32,1],
-                    D_channels = [n_dim, 32,32,1])
+    max_h = max(hidden_channels)
+    model_kws = dict(v_channels = [n_dim] + hidden_channels + [args.n_dimension],
+                    g_channels = [n_dim] + hidden_channels + [1],
+                    D_channels = [n_dim] + hidden_channels + [args.n_dimension])
+    channels = [args.n_dimension + 1 ] + hidden_channels + [1]
 else:
     model_kws = {}
 
@@ -104,6 +106,7 @@ model = model_class(
         deltax_weight = args.deltax_weight,
         weight_intensity = args.weight_intensity,
         time_scale_factor = args.time_scale_factor,
+        time_sensitive = args.time_sensitive,
         **model_kws
     )
 
@@ -131,6 +134,7 @@ train_DS = reader.TwoTimpepoint_AnnDS(
                             log_transform=False,
                             norm_time=args.norm_time,
                             deltax_key=args.deltax_key,
+                            kde_kws = {"bw_method":args.bw},
                             batchsize=args.batch_size)
 
 def my_collection_fn(batch):

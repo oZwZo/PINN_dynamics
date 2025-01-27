@@ -47,7 +47,8 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subp
     if subplot_kws is None:
         subplot_kws = default_plotting_kw
     else:
-        subplot_kws = default_plotting_kw.update(subplot_kws)
+        default_plotting_kw.update(subplot_kws)
+        subplot_kws = default_plotting_kw
     fig,axs = plt.subplots(1, n_timepoints, **subplot_kws)
     # axs = axs.flatten()
     axis_j = 0
