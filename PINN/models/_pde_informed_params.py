@@ -398,11 +398,15 @@ class pde_params_base(pl.LightningModule):
                 vu.sum(), s_t, create_graph=True, allow_unused=True)[0]
 
             # the amout of mass flowing with the global drift
-            drift = torch.mul(global_drift.sum(dim=1) , torch.div(u_stn1,u_t))
-            
+            # drift = torch.mul(global_drift.sum(dim=1) , torch.div(u_stn1,u_t))
+            raw_drift = torch.mul(u_stn1 , torch.div(global_drift.sum(dim=1),u_t))
+            # the cell only gives out 
+            drift = nn.functional.relu(raw_drift)
+
             du = drift + self.g(s_next, t_in) * u_next
-            ds = torch.zeros_like(s_t)       # assume cs doesn't change
+            ds = torch.zeros_like(s_t)       # cs doesn't change
             u_non = torch.zeros_like(u_stn1) # empty density
+            
             return (ds, growth_local-drift, ds, du)
 
 class pde_params(pde_params_base):

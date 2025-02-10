@@ -244,6 +244,67 @@ def stack_catplot(x, y, cat, stack, data, palette=sns.color_palette('Reds')):
     plt.grid()
     return ax
 
+
+def obs_composition(adata, x_var, y_var, kind='bar'):
+
+    # Calculate proportions
+    cell_type_prop = (
+        adata.obs
+        .groupby(x_var)[y_var]
+        .value_counts(normalize=True)
+        .mul(100)
+        .rename('percentage')
+        .reset_index()
+    )
+
+    # Pivot for plotting
+    prop_pivot = cell_type_prop.pivot(
+        index=x_var,
+        columns=y_var,
+        values='percentage'
+    ).fillna(0)
+
+    # Get colors from Scanpy (if available)
+    if f'{y_var}_colors' in adata.uns:
+        colors = adata.uns[f'{y_var}_colors']
+    else:
+        colors = None
+
+    # Create stacked area plot
+    plt.figure(figsize=(12, 6))
+    ax = plt.subplot()
+
+    if kind=='area':
+        prop_pivot.plot.area(
+            ax=ax,
+            stacked=True,
+            color=colors,
+            linewidth=0
+        )
+
+    if kind=='bar':
+        prop_pivot.plot.bar(
+        ax=ax,
+        stacked=True,
+        color=colors,
+        width=0.85,       # Bar width
+        edgecolor='white' # Optional: adds separation between bars
+        )
+
+    # Format plot
+    ax.set_xlabel(x_var)
+    ax.set_ylabel('Proportion (%)')
+    # ax.set_title('Cell Type Composition Over Time')
+    plt.legend(
+        title=y_var,
+        bbox_to_anchor=(1.05, 1),
+        loc='upper left'
+    )
+    plt.tight_layout()
+    plt.show()
+
+    return ax
+
 def celltype_proportion(p_celltype_melt, timepoints, cm_celltype, ct_key, density_key='value', x_lim=None,):
 
     """
