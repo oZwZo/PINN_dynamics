@@ -16,9 +16,9 @@ import seaborn as sns
 from matplotlib.patches import Patch
 
 def savefig(fig, name, path, dpi=200):
-    fig.savefig(f'{path}/{name}.png', transparent=True, bbox_inches='tight', dpi=dpi)
+    fig.savefig(f'{path}/{name}', transparent=True, bbox_inches='tight', dpi=dpi)
 
-def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None):
+def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label=None):
     r"""
     Given the setup dataset, evalute the behavior functions
 
@@ -30,7 +30,67 @@ def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None):
     s_ts : None , cell state tensor
     """
     device = pde_model.device
-    timepoint_label = DataSet.popD['t']
+
+    if timepoint_label is None:
+        timepoint_label = DataSet.popD['t']
+
+    # FORWARD 
+    u_pred_ls = []
+    v_ls = []
+    D_ls = []
+    g_ls = []
+    chunk_size= 500
+
+    s_ts = DataSet.s.float().to(device) if s_ts is None else s_ts
+
+    t_ts = DataSet.t_b.float().to(device) if t_ts is None else t_ts
+
+    with torch.no_grad():
+        for i in tqdm(range(0, len(t_ts), chunk_size)):                              
+            s_in = s_ts[i:i+chunk_size]
+            t_in = t_ts[i:i+chunk_size]
+
+            v_pred = pde_model.v(s_in, t_in)
+            g_pred = pde_model.g(s_in, t_in)
+            D_pred = pde_model.D(s_in, t_in)
+            
+            v_ls.append(v_pred.detach().cpu().numpy())
+            g_ls.append(g_pred.detach().cpu().numpy())
+            D_ls.append(D_pred.detach().cpu().numpy())
+
+            if "u" in dir(pde_model):
+                u_pred = torch.exp(pde_model.u(s_in, t_in))
+                u_pred_ls.append(u_pred.detach().cpu().numpy())
+
+        
+    # # other params
+    n_dimension = s_in.shape[1]
+    n_timepoint = len(timepoint_label)
+
+    # concate
+    g_pred_ay = np.concatenate(g_ls, axis=0).reshape(n_timepoint,-1)
+    v_pred_ay = np.concatenate(v_ls, axis=0).reshape(n_timepoint, -1, n_dimension)
+    D_pred_ay = np.concatenate(D_ls, axis=0).reshape(n_timepoint,-1)
+
+
+    return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
+
+
+def continuous_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label=None):
+    r"""
+    Given the setup dataset, evalute the behavior functions
+
+    Arguments:
+    ----------
+    pde_model : nn.Module, sub-class of PINN.models.pde_params_base
+    DataSet : sub-class of `PINN.readers.HighdimAnnDS` 
+    t_ts : None , time point tensor
+    s_ts : None , cell state tensor
+    """
+    device = pde_model.device
+
+    if timepoint_label is None:
+        timepoint_label = DataSet.popD['t']
 
     # FORWARD 
     u_pred_ls = []
@@ -198,6 +258,47 @@ def param_vs_score(adata, obs_key, param, timepoints=None,timepoint_key='timepoi
         pr.append( pearsonr(param[i][idx_t], score[idx_t])[0] )
     
     return np.array(spr), np.array(pr)
+
+
+def assign_nearest_cell(input_ay, adata, cellstate_key, n_dimension, n_trees=10,  n_neighbors=None, annotation=None, return_model=False, idx=None):
+    """
+    """
+    import annoy
+
+    
+    cellstate = adata.obsm[cellstate_key][:,:n_dimension]
+    assert input_ay.shape[1] == cellstate.shape[1], "the dimension of cellstate and the query don't match"
+
+    # build index if not given
+    if idx is None:
+        idx = annoy.AnnoyIndex(cellstate.shape[1], "euclidean")
+
+        [idx.add_item(i, cellstate[i]) for i in range(len(adata))]
+        idx.build(n_trees)
+
+    # define number of neighbors
+    if n_neighbors is None:
+        try:
+            n_neighbors = adata.uns['neighbors']['params']['n_neighbors']
+        except:
+            n_neighbors = n_trees
+
+    # find neighbors
+    nn = np.array(
+        [idx.get_nns_by_vector(input_ay[i], n_neighbors) for i in range(len(input_ay))]
+    )
+    nn_return = nn
+
+    # if annotation_key is given, return the annotation of the nearest cells
+    if annotation is not None:
+        nn_return = pd.DataFrame(adata[nn.flatten()].obs[annotation].to_numpy().reshape(-1, n_neighbors)).T
+
+    if return_model:
+        return nn_return, idx
+    else:
+        return nn_return
+
+
 
 def W_distance(u_b, u_simulate, p=2, log_transform=False):
     r"""

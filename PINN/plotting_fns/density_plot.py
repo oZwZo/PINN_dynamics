@@ -271,7 +271,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
         colors = None
 
     # Create stacked area plot
-    plt.figure(figsize=(12, 6))
+    fig = plt.figure(figsize=(12, 6))
     ax = plt.subplot()
 
     if kind=='area':
@@ -303,7 +303,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
     plt.tight_layout()
     plt.show()
 
-    return ax
+    return fig, ax
 
 def celltype_proportion(p_celltype_melt, timepoints, cm_celltype, ct_key, density_key='value', x_lim=None,):
 

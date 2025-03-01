@@ -11,7 +11,12 @@ import torch
 from matplotlib import pyplot as plt
 from matplotlib import cm
 import matplotlib.animation as animation
+import seaborn as sns
 from .density_plot import umap_by_time
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.spatial.distance import pdist
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 
 # predict
 
@@ -110,3 +115,67 @@ def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     ani = animation.FuncAnimation(fig, run, frames=continous_u.shape[0], interval=10, init_func=init)  # 製作動畫
     ani.save(save_path, fps=fps, writer='pillow') 
 
+
+def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, method='ward', cmap='viridis', context_kws={}):
+    """
+    Create a truncated clustermap with colored dendrogram and return cluster assignments and reordered indices.
+
+    Parameters:
+    - matrix: numpy array, the input matrix where rows are to be clustered.
+    - num_clusters: int, the number of clusters to form.
+    - truncate_mode: str, the truncation mode for the dendrogram (default is "level").
+    - p: int, the truncation parameter (e.g., number of levels for "level" mode).
+    - method: str, the linkage method to use (default is 'ward').
+    - cmap: str, the colormap for the heatmap (default is 'viridis').
+
+    Returns:
+    - clusters: numpy array, cluster assignments for each row.
+    - reordered_indices: numpy array, reordered row indices based on the dendrogram.
+    """
+    # Compute pairwise distances and linkage matrix
+    row_distances = pdist(matrix, metric='euclidean')
+    row_linkage = linkage(row_distances, method=method)
+    
+    # Form clusters
+    clusters = fcluster(row_linkage, num_clusters, criterion='maxclust')
+    
+    # Create a truncated dendrogram to get reordered indices
+    dnd = dendrogram(row_linkage, truncate_mode=truncate_mode, p=p, no_plot=True)
+    reordered_indices = dnd['leaves']
+    
+    # Map cluster labels to colors
+    cluster_colors = sns.color_palette("husl", num_clusters)  # Use a color palette
+    row_colors = [cluster_colors[label - 1] for label in clusters]  # Map labels to colors
+    
+    # Create a clustermap with the reordered indices and row colors
+
+    with plt.rc_context(**context_kws):
+        g = sns.clustermap(
+            matrix,
+            row_linkage=row_linkage,
+            col_linkage=None,  # Only cluster rows
+            col_cluster=False,
+            cmap=cmap,
+            row_colors=row_colors,  # Color rows by cluster
+            dendrogram_ratio=(0.2, 0),  # Adjust dendrogram size
+            figsize=(8, 8)
+        )
+    # g.ax_heatmap.set_xticks(range(0,100,10))
+    # g.ax_heatmap.set_xticklabels(range(0,100,10))
+
+    # Add a legend for the row colors
+    legend_patches = [
+        Patch(color=cluster_colors[i], label=f"Cluster {i + 1}")
+        for i in range(num_clusters)
+    ]
+    plt.legend(
+        handles=legend_patches,
+        title="Clusters",
+        bbox_to_anchor=(-0.5, -4),
+        loc='lower left',
+        borderaxespad=0.
+    )
+
+    plt.show()
+    
+    return clusters, reordered_indices, g
