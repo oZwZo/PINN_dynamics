@@ -467,6 +467,21 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     return delta_X, neighbor_ls
 
 
+def train_test_split_adata(adata, leaveout=[None], val_size=0.1, test_size=0.1, timepoint_key='timepoint_tx_days'):
+
+    obs = adata.obs
+    val_test_cbs = obs.query(f"`{timepoint_key}` not in @leaveout").sample(frac=0.2).index
+    test_cb = np.random.choice(val_test_cbs, size=len(val_test_cbs)//2,replace=False)
+
+    split_mapper = {cb:'test' for cb in test_cb}
+    val_cbs = {cb:'val' for cb in val_test_cbs if cb not in test_cb}
+    train_cbs = {cb:'train' for cb in adata.obs_names if cb not in val_test_cbs}
+
+    split_mapper.update(val_cbs)
+    split_mapper.update(train_cbs)
+
+    return adata.obs.index.map(split_mapper)
+
 def make_coord_adata(adata, cellstate_key, n_dimension, v = None):
     r"""
     construct adata based on cellstate coodinates from expression matrix based adata

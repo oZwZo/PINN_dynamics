@@ -50,6 +50,10 @@ class pde_params_base(pl.LightningModule):
         self.GNLL_fn = nn.GaussianNLLLoss()                     # for population loss
         self.KLD_fn = torch.nn.KLDivLoss(reduction="none")
 
+        self.g_channels = g_channels
+        self.v_channels = v_channels
+        self.D_channels = D_channels
+
 
     def loss_fn(self,x, x_hat, weight=None):
         """

@@ -75,63 +75,79 @@ def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label
 
     return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
 
-
-def continuous_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label=None):
+@torch.no_grad
+def continuous_params(pde_model, DataSet, 
+                        param = 'g',
+                        n_interval = 10,
+                        groupby_key = None,
+                        agg_fun = 'mean',
+                        chunk_size = 1000):
     r"""
-    Given the setup dataset, evalute the behavior functions
+    Predict the continuous change of dynamic parameters.
+    The cellstate observed at the last timepoint is used.
 
     Arguments:
     ----------
     pde_model : nn.Module, sub-class of PINN.models.pde_params_base
     DataSet : sub-class of `PINN.readers.HighdimAnnDS` 
-    t_ts : None , time point tensor
-    s_ts : None , cell state tensor
+    param : str, one of ['g', 'v', 'D', 'u']
+    n_interval : number of intermediate point between two timepoints
+    groupby_key : str, aggregate the predicted param according to cell type or cluster, one of the obs_key of the adata
+    agg_fun : aggregtion function
+    chunk_size : int, minibatch size
     """
-    device = pde_model.device
 
-    if timepoint_label is None:
-        timepoint_label = DataSet.popD['t']
 
-    # FORWARD 
-    u_pred_ls = []
-    v_ls = []
-    D_ls = []
-    g_ls = []
-    chunk_size= 500
+    param_ls = []
 
-    s_ts = DataSet.s.float().to(device) if s_ts is None else s_ts
+    # <ForLoop1: iterate between timepoint and obsreved cellstate>
+    for it, s_ts in tqdm(enumerate(DataSet.cellstate_t_ls[:-1])):
+        t = DataSet.T_b[it]
+        tp1 = DataSet.T_b[it+1]
 
-    t_ts = DataSet.t_b.float().to(device) if t_ts is None else t_ts
-
-    with torch.no_grad():
-        for i in tqdm(range(0, len(t_ts), chunk_size)):                              
-            s_in = s_ts[i:i+chunk_size]
-            t_in = t_ts[i:i+chunk_size]
-
-            v_pred = pde_model.v(s_in, t_in)
-            g_pred = pde_model.g(s_in, t_in)
-            D_pred = pde_model.D(s_in, t_in)
-            
-            v_ls.append(v_pred.detach().cpu().numpy())
-            g_ls.append(g_pred.detach().cpu().numpy())
-            D_ls.append(D_pred.detach().cpu().numpy())
-
-            if "u" in dir(pde_model):
-                u_pred = torch.exp(pde_model.u(s_in, t_in))
-                u_pred_ls.append(u_pred.detach().cpu().numpy())
-
+        if groupby_key is not None:
+            agg_col = []
+            real_time = DataSet.popD['t'][it]
+            # obs_t = DataSet.adata.obs.query(f"`{DataSet.timepoint_key}` == @real_time").copy()
+            obs_t = DataSet.adata.obs.copy()
+            obs_t['str_col'] = 'x'
+            ct_count_dict = obs_t.query(f"`{DataSet.timepoint_key}` == @real_time").groupby([groupby_key]).agg({"str_col":'count'}).to_dict()['str_col']
         
-    # # other params
-    n_dimension = s_in.shape[1]
-    n_timepoint = len(timepoint_label)
+        # <ForLoop2:iterate with differrent intemediate t>
+        for t_mid in np.linspace(t, tp1, n_interval):
 
-    # concate
-    g_pred_ay = np.concatenate(g_ls, axis=0).reshape(n_timepoint,-1)
-    v_pred_ay = np.concatenate(v_ls, axis=0).reshape(n_timepoint, -1, n_dimension)
-    D_pred_ay = np.concatenate(D_ls, axis=0).reshape(n_timepoint,-1)
+            s_ts_gpu = torch.from_numpy(DataSet.cellstate).float().to(device)
+            t_ts = torch.full((s_ts_gpu.shape[0],), t_mid).float().to(device)
 
+            # <ForLoop3:forward by chunk>
+            param_t = []
+            for i in range(0, len(t_ts), chunk_size):                              
+                s_in = s_ts_gpu[i:i+chunk_size]
+                t_in = t_ts[i:i+chunk_size]
 
-    return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
+                # forward here
+                param_pred = pde_model.__getattr__(param)(s_in, t_in)
+                param_t.append(param_pred.detach().cpu().numpy())
+            
+            param_catchunk = np.concatenate(param_t, axis=0)
+            # <ForLoop3>
+
+            if groupby_key is not None:
+                obs_t[f"{t_mid}"] = param_catchunk
+                agg_col.append(f"{t_mid}")
+            else:
+                param_ls.append(param_catchunk)
+            # <ForLoop2>
+
+        if groupby_key is not None:
+            params = obs_t[agg_col+[groupby_key]].groupby(groupby_key).agg(agg_fun)
+            params = pd.melt(params.reset_index(), id_vars=groupby_key)
+            params['timepoint_tx_day'] = real_time
+            params['ct_of_day'] = params[groupby_key].map(ct_count_dict)
+            param_ls.append(params)
+        # <ForLoop1>
+
+    return param_ls
 
 def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_span=1, timepoints=None, cellstate=None, return_all=False):
     r"""
