@@ -199,7 +199,7 @@ def density_shortterm_simulation(pde_model, DataSet, timepoint_idx=None, time_sp
 
         out_t = []
 
-        print("simulating from timepoint", t_list[it], "to", t_list[itp1])
+        print("simulating from timepoint", timepoints[it], "to", timepoints[itp1])
 
         for i in range(0, len(cellstate), chunk_size):
 
@@ -332,19 +332,21 @@ def W_distance(u_b, u_simulate, p=2, log_transform=False):
     -------
     Wasserstein distance : ndarry, [n_time,]
     """
+    u_b_local = u_b.copy()
+    u_simulate_local = u_simulate.copy()
 
-    log_transform = True if np.any(u_b<0) else log_transform
+    # log_transform = True if np.any(u_b_local<0) else log_transform
 
     distance_ls = []
-    for t in range(u_b.shape[0]):
+    for t in range(len(u_b_local)):
 
         if log_transform:
-            u_b[t] = np.exp(u_b[t])
-            u_simulate[t] = np.exp(u_simulate[t])
+            u_b_local[t] = np.exp(u_b_local[t])
+            u_simulate_local[t] = np.exp(u_simulate_local[t])
 
         # normalize
-        p_b = u_b[t] / u_b[t].sum()
-        p_int = u_simulate[t] / u_simulate[t].sum()
+        p_b = u_b_local[t] / u_b_local[t].sum()
+        p_int = u_simulate_local[t] / u_simulate_local[t].sum()
 
         if p==1:
             w = np.abs(p_b - p_int)
@@ -369,16 +371,19 @@ def KLD_density(u_b, u_simulate, sanity_check=True):
     -------
     KLD_ls : ndarray, [n_time, ]
     """
+    u_b_local = u_b.copy()
+    u_simulate_local = u_simulate.copy()
+
     if sanity_check:
-        assert u_b.shape == u_simulate.shape, "observation and prediction must be the same"
-        assert np.all(u_b>=0), "density must be positive"
+        assert u_b_local.shape == u_simulate_local.shape, "observation and prediction must be the same"
+        assert np.all(u_b_local>=0), "density must be positive"
 
     KLD_ls = []
-    for t in range(u_b.shape[0]):
+    for t in range(len(u_b_local)):
 
         # normalize
-        p_b = u_b[t] / u_b[t].sum()
-        p_sim = u_simulate[t] / u_simulate[t].sum()
+        p_b = u_b_local[t] / u_b_local[t].sum()
+        p_sim = u_simulate_local[t] / u_simulate_local[t].sum()
         p_b += 1e-34
         p_sim += 1e-34
 

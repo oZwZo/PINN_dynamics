@@ -96,6 +96,8 @@ class HigDim_AnnDS(AnnDataset):
             cellstate_t = ad_t.obsm[self.cellstate_key][:, :n_dimension]
             self.cellstate_t_ls.append(cellstate_t)
 
+        self.timepoint_mask = [self.adata.obs[self.timepoint_key] == t for t in self.popD['t']]
+
         ###
         #  IMPORTANT !
         ###

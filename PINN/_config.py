@@ -1,4 +1,6 @@
 import os
+import re
+import numpy as np
 import datetime
 import json
 from argparse import Namespace
@@ -34,17 +36,17 @@ class ExperimentConfig:
 
     def _get_experiment_config(self, args: Namespace) -> Dict[str, Any]:
         return {
+            'dataset': args.dataset,
             'gpu_devices': args.gpu_devices,
             'progress_bar': args.progress_bar,
         }
 
     def _get_dataset_config(self, args: Namespace) -> Dict[str, Any]:
         return {
-            'dataset': args.dataset,
             'cellstate_key': args.cellstate_key,
             'n_grid': args.n_grid,
             'n_dimension': args.n_dimension,
-            'bw': args.bw,
+            "kde_kws": {"bw_method":null},
             'timepoint_idx': args.timepoint_idx,
             'deltax_key': args.deltax_key,
             'norm_time': args.norm_time,
@@ -111,6 +113,20 @@ class ExperimentConfig:
 
         self.store_attr(data)
         self.raw_args['config'] = file_path
+
+    def find_lastest_ckpt(self):
+        """
+        find the ckpt file with the minimum loss given the config class
+        """
+        # look for ckpt files
+        log_dir = os.path.join(self.experiment_config['checkpoint_dir'], 'checkpoints')
+        ckpts = [f for f in os.listdir(log_dir) if f.endswith('.ckpt')]
+
+        # extract loss
+        loss = [float(re.match(r"epoch=\d{1,3}-total_loss=([\.,\d]{1,30}).ckpt", ckpt).group(1)) for ckpt in ckpts]
+        # look for min loss
+        ckpt_path = os.path.join(log_dir, ckpts[np.argmin(loss)])
+        return ckpt_path
             
 
 
