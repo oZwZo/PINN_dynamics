@@ -88,14 +88,14 @@ else:
 adata = sc.read_h5ad(h5_path)
 
 if args.timepoint_idx is None:
-    timepoint_idx = len(adata.uns['pop']['t'])
+    args.timepoint_idx = len(adata.uns['pop']['t'])
 else:
-    timepoint_idx = eval(args.timepoint_idx)
+    args.timepoint_idx = eval(args.timepoint_idx)
 
 if args.log_name:
     log_name = args.log_name
 else:
-    log_name = f"{args.dataset}-{args.cellstate_key}_n{timepoint_idx}"
+    log_name = f"{args.dataset}-{args.cellstate_key}_n{args.timepoint_idx}"
 
 save_path = os.path.join(main_path, 'logs', log_name, args.model+['','_tsense'][args.time_sensitive])
 PINN.tl.make_dir(save_path)
@@ -154,7 +154,7 @@ if args.pretrained is not None:
 
 train_DS = reader.TwoTimpepoint_AnnDS(
                             AnnData=adata, 
-                            timepoint_idx=timepoint_idx, 
+                            timepoint_idx = args.timepoint_idx, 
                             n_dimension = args.n_dimension,
                             cellstate_key=args.cellstate_key,  #'DM_EigenVector'
                             log_transform=False,
