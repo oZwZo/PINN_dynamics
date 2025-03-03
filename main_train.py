@@ -62,9 +62,11 @@ args = parser.parse_args()
 # Configuration handling
 if args.config:
     # Load configuration and override arguments
-    config = PINN.ExperimentConfig.from_json(args.config)
+    config = PINN.ExperimentConfig(config=args.config)
+    gpu_devices = args.gpu_devices
     args = Namespace(**config.raw_args)
-    args.config = config.raw_args.get('config', None)  # Preserve original config path
+    args.gpu_devices = gpu_devices    # otherwise covered by the configged gpu devices
+    # config.raw_args['config'] = args.config   # Preserve original config path
 else:
     # Validate required arguments
     if args.gpu_devices is None:
@@ -191,17 +193,13 @@ trainer = pl.Trainer(
 
 # Create and save config if not loading from existing
 version = trainer.logger.version
-if not args.config:
-    config = PINN.ExperimentConfig(save_path, args, model)
-    config.experiment_config['version'] = version
-    config.experiment_config['checkpoint_dir'] = trainer.logger.log_dir
-    config.save(os.path.join(save_path, f'V{version}_config.json'))
-else:
-    # Update save path in loaded config
-    config.experiment_config['save_dir'] = save_path
-    config.experiment_config['version'] = version
-    config.experiment_config['checkpoint_dir'] = trainer.logger.log_dir
-    config.save(os.path.join(save_path, f'V{version}_config.json'))
+
+config_run = PINN.ExperimentConfig(args=args, model=model)
+config_run.experiment_config['save_dir'] = save_path
+config_run.experiment_config['version'] = version
+config_run.experiment_config['checkpoint_dir'] = trainer.logger.log_dir
+config_run.save(os.path.join(save_path, f'V{version}_config.json'))
+
 
 
 trainer.fit(model, train_dataloaders=train_DL)
