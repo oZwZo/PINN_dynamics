@@ -7,34 +7,33 @@ from typing import Dict, Any
 class ExperimentConfig:
     """Records and manages experiment configuration settings."""
     
-    def __init__(self,  save_path: str=None,  args: Namespace = None, model = None):
+    def __init__(self,  config: str=None,  args: Namespace = None, model = None):
         """
         Args:
             args: Parsed command-line arguments
-            save_path: Experiment directory path
+            config: Experiment directory path
             model: Initialized model instance
         """
         if (args is not None) and (model is not None):
             self.run_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.experiment_config = self._get_experiment_config(args, save_path)
+            self.experiment_config = self._get_experiment_config(args)
             self.dataset_config = self._get_dataset_config(args)
             self.model_config = self._get_model_config(model)
             self.training_config = self._get_training_config(args)
             self.raw_args = vars(args)
 
-        elif os.path.exists(save_path) and save_path.endswith('.json'):
-            self.from_json(save_path)
+        elif os.path.exists(config) and config.endswith('.json'):
+            self.from_json(config)
 
-        elif save_path is None:
+        elif config is None:
             pass # do nothing
 
         else:
-            raise ValueError(f"{save_path} config file not Found, args and model can not be empty for new experiment")
+            raise ValueError(f"{config} config file not Found, args and model can not be empty for new experiment")
 
 
-    def _get_experiment_config(self, args: Namespace, save_path: str) -> Dict[str, Any]:
+    def _get_experiment_config(self, args: Namespace) -> Dict[str, Any]:
         return {
-            'save_dir': save_path,
             'gpu_devices': args.gpu_devices,
             'progress_bar': args.progress_bar,
         }
@@ -93,13 +92,12 @@ class ExperimentConfig:
             json.dump(self.to_dict(), f, indent=4)
 
     def store_attr(self, json_load):
-        for k, v in json_load:
+        for k, v in json_load.items():
             self.__setattr__(k, v)
             if v is None:
                 self.__setattr__(k, None)
     
-    @classmethod
-    def from_json(cls, file_path: str) -> 'ExperimentConfig':
+    def from_json(self, file_path: str) -> 'ExperimentConfig':
         """Load a saved experiment configuration from JSON file.
         
         Args:
@@ -111,8 +109,8 @@ class ExperimentConfig:
         with open(file_path, 'r') as f:
             data = json.load(f)
 
-        cls.store_attr(data)
+        self.store_attr(data)
+        self.raw_args['config'] = file_path
             
-        # Create dummy Namespace for raw arguments
-        args = Namespace(**data['raw_args'])
+
 
