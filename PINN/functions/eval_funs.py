@@ -97,13 +97,14 @@ def continuous_params(pde_model, DataSet,
     chunk_size : int, minibatch size
     """
 
-
     param_ls = []
 
     # <ForLoop1: iterate between timepoint and obsreved cellstate>
     for it, s_ts in tqdm(enumerate(DataSet.cellstate_t_ls[:-1])):
         t = DataSet.T_b[it]
         tp1 = DataSet.T_b[it+1]
+
+        print("from" , t, "to",tp1)
 
         if groupby_key is not None:
             agg_col = []
@@ -114,7 +115,11 @@ def continuous_params(pde_model, DataSet,
             ct_count_dict = obs_t.query(f"`{DataSet.timepoint_key}` == @real_time").groupby([groupby_key]).agg({"str_col":'count'}).to_dict()['str_col']
         
         # <ForLoop2:iterate with differrent intemediate t>
-        for t_mid in np.linspace(t, tp1, n_interval):
+        if it+1 == len(DataSet.cellstate_t_ls[:-1]):
+            int_timepoint = np.linspace(t, tp1, n_interval+1)
+        else:
+            int_timepoint = np.linspace(t, tp1, n_interval+1)[:-1]
+        for t_mid in int_timepoint:
 
             s_ts_gpu = torch.from_numpy(DataSet.cellstate).float().to(device)
             t_ts = torch.full((s_ts_gpu.shape[0],), t_mid).float().to(device)
@@ -126,22 +131,22 @@ def continuous_params(pde_model, DataSet,
                 t_in = t_ts[i:i+chunk_size]
 
                 # forward here
-                param_pred = pde_model.__getattr__(param)(s_in, t_in)
+                param_pred = pde_model.__getattr__(param)(s_in, t_in) / pde_model.time_scale_factor
                 param_t.append(param_pred.detach().cpu().numpy())
             
             param_catchunk = np.concatenate(param_t, axis=0)
             # <ForLoop3>
 
             if groupby_key is not None:
-                obs_t[f"{t_mid}"] = param_catchunk
-                agg_col.append(f"{t_mid}")
+                obs_t[f"{np.around(t_mid*3, 2)}"] = param_catchunk
+                agg_col.append(f"{np.around(t_mid*3, 2)}")
             else:
                 param_ls.append(param_catchunk)
             # <ForLoop2>
 
         if groupby_key is not None:
             params = obs_t[agg_col+[groupby_key]].groupby(groupby_key).agg(agg_fun)
-            params = pd.melt(params.reset_index(), id_vars=groupby_key)
+            params = pd.melt(params.reset_index(), id_vars=groupby_key, value_name=param)
             params['timepoint_tx_day'] = real_time
             params['ct_of_day'] = params[groupby_key].map(ct_count_dict)
             param_ls.append(params)
@@ -276,6 +281,44 @@ def param_vs_score(adata, obs_key, param, timepoints=None,timepoint_key='timepoi
     return np.array(spr), np.array(pr)
 
 
+def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints=None, pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
+    
+
+    pdt_bins = np.linspace(0,1,nbins+1)
+    pdt_label = (pdt_bins[1:] + pdt_bins[:-1])/2
+    adata.obs['pseudotime_bin'] = pd.cut(adata.obs[pseudotime_key], bins=nbins,
+                                                labels = pdt_label)
+
+
+    timepoints = adata.uns['pop']['t'] if timepoints is None else timepoints 
+    fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
+    axs = axs.flatten() if len(timepoints)>1 else [axs]
+    
+    y_smooths = []
+    for i,t in enumerate(timepoints):
+        y_col = 'Day%s_'%t + param_names
+        data = adata.obs[['pseudotime_bin']]
+        data[y_col] = params[i]
+        gdata = data.groupby("pseudotime_bin").agg({y_col:"mean"}).reset_index()
+
+        x = np.sort(gdata.pseudotime_bin.unique())
+        y = gdata[y_col].values
+
+        model2 = np.poly1d(np.polyfit(x, gdata[y_col], 7))
+
+        x_smooth = (x[1:] + x[:-1] )/2
+        y_smooth = (y[1:] + y[:-1] )/2
+
+        axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
+        axs[i].plot(x, model2(x), color='red', alpha=0.4)
+
+        y_smooths.append(y_smooth)
+
+    if return_y:
+        return y_smooths
+    else:
+        return fig, axs
+
 def assign_nearest_cell(input_ay, adata, cellstate_key, n_dimension, n_trees=10,  n_neighbors=None, annotation=None, return_model=False, idx=None):
     """
     """
@@ -346,12 +389,53 @@ def W_distance(u_b, u_simulate, p=2, log_transform=False):
 
         # normalize
         p_b = u_b_local[t] / u_b_local[t].sum()
-        p_int = u_simulate_local[t] / u_simulate_local[t].sum()
 
         if p==1:
-            w = np.abs(p_b - p_int)
+            w = np.abs(u_b_local[t] - u_simulate_local[t])
         elif p > 1:
-            w = np.power(p_b - p_int, p)
+            w = np.power(u_b_local[t] - u_simulate_local[t], p)
+            w = w**(1/p)
+        distance_ls.append(np.sum(p_b*w))
+
+    return np.array(distance_ls)
+
+
+def W_log_distance(u_b, u_simulate, p=2, log_transform=False):
+    r"""
+    Normalize the density and compute the Wasserstein distance between observation and prediction.
+    Log-density is supported, pass log_transform = True
+
+    Input
+    -------
+    u_b : ndarray, [n_time, n_cell] , observed density
+    u_simulate : ndarray, [n_time, n_cell], inferred desity
+    p : int, degree of the distance, default W-2 distance
+    sanity_check : bool, whether check shape and positivity
+
+    Return 
+    -------
+    Wasserstein distance : ndarry, [n_time,]
+    """
+    u_b_local = u_b.copy()
+    u_simulate_local = u_simulate.copy()
+
+    # log_transform = True if np.any(u_b_local<0) else log_transform
+
+    distance_ls = []
+    for t in range(len(u_b_local)):
+
+        if log_transform:
+            u_b_local[t] = np.exp(u_b_local[t])
+            u_simulate_local[t] = np.exp(u_simulate_local[t])
+
+        # normalize
+        p_b = u_b_local[t] / u_b_local[t].sum() + 1e-30
+        p_int = u_simulate_local[t] / u_simulate_local[t].sum() + 1e-30
+
+        if p==1:
+            w = np.abs(np.log(p_b) - np.log(p_int))
+        elif p > 1:
+            w = np.power(np.log(p_b) - np.log(p_int), p)
             w = w**(1/p)
         distance_ls.append(np.sum(p_b*w))
 
@@ -392,3 +476,59 @@ def KLD_density(u_b, u_simulate, sanity_check=True):
     KLD_ls= np.array(KLD_ls)
 
     return KLD_ls
+
+
+
+def mmd_laplace(X, Y, gamma=None):
+    r"""
+    Compute MMD with Laplace kernel between two distributions.
+    
+    Input
+    -------
+    X, Y (array-like): Samples from the two distributions (shape: [n_samples, n_features]).
+    gamma (float, optional): Bandwidth parameter. If None, uses median heuristic.
+        
+    Return 
+    -------
+    float: MMD distance.
+    """
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+    
+    # Ensure 2D arrays (samples, features)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    if Y.ndim == 1:
+        Y = Y.reshape(-1, 1)
+    assert X.shape[1] == Y.shape[1], "X and Y must have the same number of features."
+    
+    # Median heuristic for gamma (if not provided)
+    if gamma is None:
+        Z = np.concatenate([X, Y], axis=0)
+        pairwise_dist = np.sum(np.abs(Z[:, None, :] - Z[None, :, :]), axis=-1)
+        gamma = 1.0 / np.median(pairwise_dist[np.triu_indices_from(pairwise_dist, k=1)])
+        print("heuristic gamma", gamma)
+
+    # Compute kernel matrices
+    def laplace_kernel(a, b):
+        dist = np.sum(np.abs(a[:, None, :] - b[None, :, :]), axis=-1)
+        # dist = np.sum(np.abs(a[:,  :] - b[ :, :]), axis=-1)
+        return np.exp(-gamma * dist)
+    
+    print('computing K<XX>')
+    K_XX = laplace_kernel(X, X)
+    print('computing K<YY>')
+    K_YY = laplace_kernel(Y, Y)
+    print('computing K<XY>')
+    K_XY = laplace_kernel(X, Y)
+    
+    # Compute MMD² (unbiased estimator)
+    m = X.shape[0]
+    n = Y.shape[0]
+    
+    term_XX = (K_XX.sum() - m) / (m * (m - 1)) if m > 1 else 0.0
+    term_YY = (K_YY.sum() - n) / (n * (n - 1)) if n > 1 else 0.0
+    term_XY = K_XY.mean()
+    
+    mmd_squared = term_XX + term_YY - 2 * term_XY
+    return np.sqrt(max(mmd_squared, 0.0))  # Ensure non-negative
