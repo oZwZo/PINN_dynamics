@@ -116,7 +116,7 @@ def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     ani.save(save_path, fps=fps, writer='pillow') 
 
 
-def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, method='ward', cmap='viridis', context_kws={}):
+def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, method='ward', cmap='viridis', context_kws={}, show_log=False, cluster_colors=None):
     """
     Create a truncated clustermap with colored dendrogram and return cluster assignments and reordered indices.
 
@@ -144,14 +144,18 @@ def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, metho
     reordered_indices = dnd['leaves']
     
     # Map cluster labels to colors
-    cluster_colors = sns.color_palette("husl", num_clusters)  # Use a color palette
+    if cluster_colors is None:
+        cluster_colors = sns.color_palette("husl", num_clusters)  # Use a color palette
     row_colors = [cluster_colors[label - 1] for label in clusters]  # Map labels to colors
     
     # Create a clustermap with the reordered indices and row colors
+    
+    show_matrix = np.log(matrix+1e-30) if show_log else matrix
 
-    with plt.rc_context(**context_kws):
+
+    with plt.rc_context(context_kws):
         g = sns.clustermap(
-            matrix,
+            show_matrix,
             row_linkage=row_linkage,
             col_linkage=None,  # Only cluster rows
             col_cluster=False,
@@ -170,7 +174,7 @@ def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, metho
     ]
     plt.legend(
         handles=legend_patches,
-        title="Clusters",
+        title=False,
         bbox_to_anchor=(-0.5, -4),
         loc='lower left',
         borderaxespad=0.

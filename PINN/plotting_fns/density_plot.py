@@ -271,7 +271,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
         colors = None
 
     # Create stacked area plot
-    fig = plt.figure(figsize=(12, 6))
+    fig = plt.figure(figsize=(8, 4))
     ax = plt.subplot()
 
     if kind=='area':
@@ -295,7 +295,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
     ax.set_xlabel(x_var)
     ax.set_ylabel('Proportion (%)')
     # ax.set_title('Cell Type Composition Over Time')
-    plt.legend(
+    ax.legend(
         title=y_var,
         bbox_to_anchor=(1.05, 1),
         loc='upper left'
@@ -344,3 +344,42 @@ def celltype_proportion(p_celltype_melt, timepoints, cm_celltype, ct_key, densit
     axs[n_timepoint//2].set_xlabel("cell type proportion")
 
     return fig_subplot
+
+
+# continuous density transfer
+def plot_tmap(tmap, log=False, ax=None, return_fig=False, **kws):
+
+    # matrix shape sanity check
+    if len(tmap.shape) == 1:
+        squre_size = int(np.sqrt(tmap.shape[0]))
+        tmap = tmap.reshape(squre_size,squre_size)
+    
+    elif (len(tmap.shape) == 2) and (tmap.shape[0] == 1):
+        squre_size = int(np.sqrt(tmap.shape[1]))
+        tmap = tmap.reshape(squre_size,squre_size)
+
+    elif (len(tmap.shape) == 2) and (tmap.shape[0] == tmap.shape[1]):
+        pass
+    else:
+        raise ValueError("the given transport matrix is not square")
+
+    if ax is None:
+        fig, ax = plt.subplots( figsize=(2,2) )
+        
+    if log:
+        tmap =  np.log(tmap+1e-30)
+    
+
+    # set upper triangle to nan
+    trui = np.triu_indices_from(tmap, k=1)
+    tmap[trui] = np.nan
+    
+    # the actual plotting is here
+    ax.matshow(tmap, **kws)
+    ax.set_xticklabels('')
+    ax.set_yticklabels('')    
+
+    if return_fig and (ax is None):
+        return fig, ax
+
+    
