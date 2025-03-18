@@ -362,7 +362,9 @@ class pde_params_base(pl.LightningModule):
     def predict_param(self, train_DS, device=None):    
         r"""
         Given a DataSet Class, predict the param 
+        Return : g, v, D
         """
+        
         if device is None:
             device = next(self.parameters()).device
 
@@ -398,7 +400,7 @@ class pde_params_base(pl.LightningModule):
         g_pred_ay = np.concatenate(g_ls, axis=0).reshape(n_timepoint,-1) / self.time_scale_factor
         D_pred_ay = np.concatenate(D_ls, axis=0).reshape(n_timepoint, -1, D_dim).squeeze() / self.time_scale_factor
 
-        return v_pred_ay, g_pred_ay, D_pred_ay
+        return  g_pred_ay, v_pred_ay, D_pred_ay
 
     def density_transfer(self, t, states):
         """
