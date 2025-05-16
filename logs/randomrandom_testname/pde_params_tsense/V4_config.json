@@ -1,0 +1,88 @@
+{
+    "run_date": "2025-03-03 07:55:48",
+    "experiment_config": {
+        "dataset": "tom_pos",
+        "gpu_devices": 1,
+        "progress_bar": "True",
+        "save_dir": "/ssd/users/Wergillius/Project/PINN_dynamics/logs/randomrandom_testname/pde_params_tsense",
+        "version": 4,
+        "checkpoint_dir": "/ssd/users/Wergillius/Project/PINN_dynamics/logs/randomrandom_testname/pde_params_tsense/lightning_logs/version_4"
+    },
+    "dataset_config": {
+        "cellstate_key": "DM_scaled",
+        "n_grid": 300,
+        "n_dimension": 10,
+        "kde_kws": {"bw_method":null},
+        "timepoint_idx": "[0,1,2,4,5]",
+        "deltax_key": "Delta_DM",
+        "norm_time": false
+    },
+    "model_config": {
+        "model_class": "pde_params",
+        "channels": null,
+        "activation_fn": null,
+        "ode_tol": 0.0001,
+        "D_penalty": 0.1,
+        "deltax_weight": 0.01,
+        "weight_intensity": 1,
+        "time_scale_factor": 5,
+        "time_sensitive": true,
+        "v_channels": [
+            11,
+            11,
+            64,
+            64,
+            1,
+            10
+        ],
+        "g_channels": [
+            11,
+            11,
+            64,
+            64,
+            1,
+            1
+        ],
+        "D_channels": [
+            11,
+            11,
+            64,
+            64,
+            1,
+            10
+        ]
+    },
+    "training_config": {
+        "batch_size": 50,
+        "schedule_lr": "CyclicLR",
+        "lr": 0.0003,
+        "max_epochs": 300,
+        "optimizer": "Adam"
+    },
+    "raw_args": {
+        "config": "logs/randomrandom_testname/pde_params_tsense/V2_config.json",
+        "dataset": "tom_pos",
+        "cellstate_key": "DM_scaled",
+        "model": "pde_params",
+        "pretrained": null,
+        "gpu_devices": 1,
+        "log_name": "randomrandom_testname",
+        "lr": 0.0003,
+        "schedule_lr": "CyclicLR",
+        "n_grid": 300,
+        "n_dimension": 10,
+        "timepoint_idx": "[0,1,2,4,5]",
+        "batch_size": 50,
+        "kde_kws": {"bw_method":null},
+        "tol": 0.0001,
+        "channels": "11,64,64,1",
+        "D_penalty": null,
+        "deltax_key": "Delta_DM",
+        "deltax_weight": 0.01,
+        "weight_intensity": null,
+        "time_scale_factor": 5,
+        "norm_time": false,
+        "time_sensitive": true,
+        "progress_bar": "True"
+    }
+}
