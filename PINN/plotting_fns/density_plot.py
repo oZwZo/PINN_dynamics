@@ -245,7 +245,7 @@ def stack_catplot(x, y, cat, stack, data, palette=sns.color_palette('Reds')):
     return ax
 
 
-def obs_composition(adata, x_var, y_var, kind='bar'):
+def obs_composition(adata, x_var, y_var, kind='bar', figkws={'figsize':[6,4]}, legend_kws={"bbox_to_anchor":(1.05, 1), "loc":'upper left'}):
 
     # Calculate proportions
     cell_type_prop = (
@@ -271,7 +271,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
         colors = None
 
     # Create stacked area plot
-    fig = plt.figure(figsize=(8, 4))
+    fig = plt.figure(**figkws)
     ax = plt.subplot()
 
     if kind=='area':
@@ -295,11 +295,7 @@ def obs_composition(adata, x_var, y_var, kind='bar'):
     ax.set_xlabel(x_var)
     ax.set_ylabel('Proportion (%)')
     # ax.set_title('Cell Type Composition Over Time')
-    ax.legend(
-        title=y_var,
-        bbox_to_anchor=(1.05, 1),
-        loc='upper left'
-    )
+    ax.legend(**legend_kws)
     plt.tight_layout()
     plt.show()
 

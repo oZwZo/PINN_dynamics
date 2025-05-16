@@ -15,7 +15,8 @@ import seaborn as sns
 from .density_plot import umap_by_time
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
 from scipy.spatial.distance import pdist
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, Normalize
+from matplotlib.colorbar import ColorbarBase
 from matplotlib.patches import Patch
 
 # predict
@@ -116,22 +117,63 @@ def contour_animation(s, continous_u , save_path, fill=False, fps=5):
     ani.save(save_path, fps=fps, writer='pillow') 
 
 
-def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, method='ward', cmap='viridis', context_kws={}, show_log=False, cluster_colors=None):
+def truncated_clustermap(matrix, 
+                        num_clusters, 
+                        original_shape=None, 
+                        truncate_mode="level", 
+                        p=3, method='ward', 
+                        cmap='viridis', 
+                        context_kws={}, 
+                        cbar_kws={},
+                        show_log=False, 
+                        cluster_colors=None,
+                        col_colorbar_size=(0.02, 0.15), 
+                        col_colorbar_location_x = (0.0, 0.3), 
+                        col_colorbar_location_y = (0.05, 0.3),  
+                        col_colorbar_tick_labels_x=None,
+                        col_colorbar_tick_labels_y=None):
     """
     Create a truncated clustermap with colored dendrogram and return cluster assignments and reordered indices.
 
-    Parameters:
-    - matrix: numpy array, the input matrix where rows are to be clustered.
-    - num_clusters: int, the number of clusters to form.
-    - truncate_mode: str, the truncation mode for the dendrogram (default is "level").
-    - p: int, the truncation parameter (e.g., number of levels for "level" mode).
-    - method: str, the linkage method to use (default is 'ward').
-    - cmap: str, the colormap for the heatmap (default is 'viridis').
+    Arguments
+    ----------
+    matrix: numpy array, the input matrix where rows are to be clustered.
+    num_clusters: int, the number of clusters to form.
+    original_shape: tuple of int, original 2D dimensions (n_rows, n_cols) of the matrix before flattening.
+    truncate_mode: str, the truncation mode for the dendrogram (default is "level").
+    p: int, the truncation parameter (e.g., number of levels for "level" mode).
+    method: str, the linkage method to use (default is 'ward').
+    cmap: str, the colormap for the heatmap (default is 'viridis').
+    context_kws: dict, additional keyword arguments for seaborn's plotting context.
+    show_log: bool, whether to apply a log transform to the matrix (default is False).
+    cluster_colors: list of colors, custom colors for clusters (default is None).
+    row_colorbar_size: tuple of float, size of the row colorbar (width, height) in figure units.
+    row_colorbar_location: tuple of float, location of the row colorbar (x, y) in figure units.
+    row_colorbar_tick_labels: list of str, custom tick labels for the row colorbar (default is None).
+    col_colorbar_size: tuple of float, size of the column colorbar (width, height) in figure units.
+    col_colorbar_location: tuple of float, location of the column colorbar (x, y) in figure units.
+    col_colorbar_tick_labels: list of str, custom tick labels for the column colorbar (default is None).
 
     Returns:
-    - clusters: numpy array, cluster assignments for each row.
-    - reordered_indices: numpy array, reordered row indices based on the dendrogram.
+    ----------
+    clusters: numpy array, cluster assignments for each row.
+    reordered_indices: numpy array, reordered row indices based on the dendrogram.
+    g: clustermap object.
     """
+
+    # Check if original_shape matches the number of columns
+    num_columns = matrix.shape[1]
+
+    if original_shape is None:
+        original_rows, original_cols = original_shape
+        
+    else:
+        original_rows = original_cols = int(np.sqrt(num_columns).item())
+
+    if original_rows * original_cols != num_columns:
+        raise ValueError("original_shape does not match the number of columns in the matrix.")
+
+    
     # Compute pairwise distances and linkage matrix
     row_distances = pdist(matrix, metric='euclidean')
     row_linkage = linkage(row_distances, method=method)
@@ -145,40 +187,96 @@ def truncated_clustermap(matrix, num_clusters, truncate_mode="level", p=3, metho
     
     # Map cluster labels to colors
     if cluster_colors is None:
-        cluster_colors = sns.color_palette("husl", num_clusters)  # Use a color palette
-    row_colors = [cluster_colors[label - 1] for label in clusters]  # Map labels to colors
-    
-    # Create a clustermap with the reordered indices and row colors
-    
-    show_matrix = np.log(matrix+1e-30) if show_log else matrix
+        cluster_colors = sns.color_palette("husl", num_clusters)
+
+    row_colors = [cluster_colors[label - 1] for label in clusters]
+
+    # Compute x and y coordinates for each column
+    indices = np.arange(num_columns)
+    x_coords = indices // original_cols  # Row index in original matrix
+    y_coords = indices % original_cols   # Column index in original matrix
 
 
+    # Generate discrete colormaps for x and y coordinates
+    cmap_blue = ListedColormap(plt.cm.Blues(np.linspace(0.15, 0.8, original_rows+1)))
+    cmap_grey = ListedColormap(plt.cm.Greys_r(np.linspace(0.15, 0.8, original_cols+1)))
+
+    # Map coordinates to discrete colors
+    x_colors = [ cmap_grey(i) for i in x_coords ]
+    y_colors = [ cmap_blue(i) for i in y_coords ]
+    col_colors = [ y_colors, x_colors ]
+
+    # Prepare matrix for display
+    show_matrix = np.log(matrix + 1e-30) if show_log else matrix
+    
+    
+    # Create clustermap with column colors
     with plt.rc_context(context_kws):
         g = sns.clustermap(
             show_matrix,
             row_linkage=row_linkage,
-            col_linkage=None,  # Only cluster rows
+            col_linkage=None,
             col_cluster=False,
             cmap=cmap,
-            row_colors=row_colors,  # Color rows by cluster
-            dendrogram_ratio=(0.2, 0),  # Adjust dendrogram size
-            figsize=(8, 8)
+            row_colors=row_colors,
+            col_colors=col_colors,  # Added column colors
+            dendrogram_ratio=(0.1, 0),
+            colors_ratio = (0.03, 0.02),
+            figsize=(8, 8),
+            vmin = show_matrix[show_matrix!=0].min(),
+            cbar_kws=cbar_kws,
+            cbar_pos = (0.93, 0.65, 0.04,0.25),
         )
-    # g.ax_heatmap.set_xticks(range(0,100,10))
-    # g.ax_heatmap.set_xticklabels(range(0,100,10))
 
-    # Add a legend for the row colors
+    # Customize heatmap appearance
+    g.ax_heatmap.set_xticks([])
+    g.ax_heatmap.set_yticks([])
+
+    # Add legend for row clusters
     legend_patches = [
         Patch(color=cluster_colors[i], label=f"Cluster {i + 1}")
         for i in range(num_clusters)
     ]
-    plt.legend(
-        handles=legend_patches,
-        title=False,
-        bbox_to_anchor=(-0.5, -4),
-        loc='lower left',
-        borderaxespad=0.
+    g.ax_heatmap.legend(
+        handles = legend_patches,
+        title = False,
+        bbox_to_anchor = (1.05, 0.05, 0.25, 0.25),
+        loc = 'lower left',
+        borderaxespad = 0 ,
+        fontsize=12,
+        frameon=False,
     )
+
+    # Add a continuous colorbar for column colors (x-coordinates, blue)
+    cax_col_x = g.fig.add_axes([col_colorbar_location_x[0], col_colorbar_location_x[1], col_colorbar_size[0], col_colorbar_size[1]])
+    cb_col_x = ColorbarBase(
+        cax_col_x,
+        cmap = cmap_blue,
+        boundaries = np.arange(original_rows + 1)/original_rows - 0.05,
+        ticks = np.arange(original_rows),
+        orientation = 'vertical'
+    )
+    if col_colorbar_tick_labels_x is not None:
+        cb_col_x.set_ticks(np.arange(original_rows)/original_rows)
+        cb_col_x.set_ticklabels(col_colorbar_tick_labels_x)
+    # cb_col_x.set_label('X Coordinate')
+
+    # Add a continuous colorbar for column colors (y-coordinates, grey)
+    if col_colorbar_location_y is None:
+        col_colorbar_location_y = col_colorbar_location_x
+        col_colorbar_location_y[0] += 0.06
+    cax_col_y = g.fig.add_axes([col_colorbar_location_y[0], col_colorbar_location_y[1] , col_colorbar_size[0], col_colorbar_size[1]])
+    cb_col_y = ColorbarBase(
+        cax_col_y,
+        cmap=cmap_grey,
+        boundaries = np.arange(original_cols + 1)/original_cols - 0.05,
+        ticks = np.arange(original_cols),
+        orientation = 'vertical'
+    )
+    if col_colorbar_tick_labels_y is not None:
+        cb_col_y.set_ticks(np.arange(original_cols)/original_cols)
+        cb_col_y.set_ticklabels(col_colorbar_tick_labels_y)
+    # cb_col_y.set_label('Y Coordinate')
 
     plt.show()
     
