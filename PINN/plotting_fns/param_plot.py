@@ -281,3 +281,81 @@ def truncated_clustermap(matrix,
     plt.show()
     
     return clusters, reordered_indices, g
+
+
+# Plot scaled gene expression trends for TFgroup1 along pseudotime in the Neu branch
+
+def plot_gene_trends(adata, gene_list, gene_trend_key, pseudotime_key='palantir_pseudotime', n_bins=100, PINN_params=None, para_name=None, ax=None):
+    """
+    Plot gene trends for a list of genes along pseudotime.
+    If the PINN_params and para_name are provided, it will also plot the PINN parameters on a secondary y-axis.
+    
+    Args
+    ----------
+    adata: AnnData object containing the data.
+    gene_list: List of genes to plot.
+    gene_trend_key : the varm key in adata that contains the gene trends.
+    pseudotime_key: Key in adata.obs that contains pseudotime values.
+    n_bins: Number of bins for pseudotime.
+    PINN_params : Optional, a numpy array of PINN parameters to plot on a secondary y-axis.
+    para_name : Optional, a string to label the secondary y-axis for PINN_params.
+
+    Returns
+    ----------
+    fig, ax, ax2
+
+    Example
+    ----------
+    >>> TFgroup1 = ["Cebpe", "Clec4a2", "Cst7", "Elane", "Fcgr3", "Prtn3", "S100a8", "Wfdc21"]
+
+    >>> pint_v_project = tl.aggregate_params_by_pseudotime(adata_neu, adata_neu.obsm['v_norm'].T, 
+                            param_names='v',  pseudotime_key='palantir_pseudotime', nbins=100, return_y=True)
+
+    >>> plot_gene_trends(adata_raw, TFgroup1, PINN_params=pint_v_project[3], para_name='PINN Day27 v')
+    """
+    # Ensure the gene list is in the correct format
+    
+    overlap_genes = set(gene_list).intersection(adata.var_names)
+    print("gene not found :", set(gene_list) - overlap_genes)
+    gene_trends_df = adata.varm[gene_trend_key].loc[list(overlap_genes)]
+
+    if ax is None:
+        fig = plt.figure(figsize=(8, 5))
+        ax = fig.gca()
+    else:
+        fig = ax.figure
+
+    x = gene_trends_df.columns.astype(float)  # Convert column names to float for plotting
+    # Plot gene trends
+    for gene in gene_trends_df.index:
+        ax.plot(x, gene_trends_df.loc[gene], label=gene)
+
+    # Set x-ticks to only 5 evenly spaced ticks
+    xticks = np.linspace(0, len(gene_trends_df.columns) - 1, 5, dtype=int)
+
+
+    if PINN_params is not None and para_name is not None:
+        # Plot pint_project[3] on a secondary y-axis
+        ax2 = ax.twinx()
+        # Align x for pint_project[3] (length 99) to gene_trends_df columns (length N)
+        x_pint = np.linspace(0, x.max(), n_bins-1)
+
+        ax2.plot(x_pint, PINN_params, color='black', linestyle='--', label=para_name)
+        ax2.set_ylabel("PINT v_norm")
+        lines2, labels2 = ax2.get_legend_handles_labels()
+    else:
+        ax2 = None
+        lines2, labels2 = [], []
+
+    # # Legends
+    lines1, labels1 = ax.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, bbox_to_anchor=(1.15, 1), loc='upper left')
+
+    # ax.set_xticks(np.linspace(0,1, 5))
+    ax.set_xlabel("Pseudotime")
+    ax.set_ylabel("Scaled gene expression")
+
+    # plt.title("Gene trends for Neutrophil genes along pseudotime (Neu branch)")
+    plt.tight_layout()
+
+    return fig, ax, ax2
