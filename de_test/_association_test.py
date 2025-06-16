@@ -186,12 +186,16 @@ class AssociationTest:
                 
                 # Compute mean log fold change
                 mean_log_fc = np.mean(np.abs(est_reduced))
+                # if len(est_reduced) > 1:
+                #     mean_log_fc = np.mean(np.abs(est_reduced))
+                # else:
+                #     mean_log_fc = est_reduced.item()
                 
                 results.append({
                     'gene': gene_idx,
-                    'waldStat': wald,
+                    'waldStat': wald[0],
                     'df': df,
-                    'pvalue': pval,
+                    'pvalue': pval[0],
                     'meanLogFC': mean_log_fc
                 })
                 
