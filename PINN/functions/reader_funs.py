@@ -383,6 +383,10 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     """
     the Key function defines the noise sampling process 
     given the starting point i
+
+    Return:
+    -----
+    delta_X, neighbor_ls
     """
 
     connectivities = adata.obsp['connectivities'].copy()

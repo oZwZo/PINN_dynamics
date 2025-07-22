@@ -46,7 +46,7 @@ class ExperimentConfig:
             'cellstate_key': args.cellstate_key,
             'n_grid': args.n_grid,
             'n_dimension': args.n_dimension,
-            "kde_kws": {"bw_method":null},
+            "kde_kws": {"bw_method":None},
             'timepoint_idx': args.timepoint_idx,
             'deltax_key': args.deltax_key,
             'norm_time': args.norm_time,
