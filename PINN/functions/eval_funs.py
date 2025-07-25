@@ -75,6 +75,47 @@ def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label
 
     return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
 
+
+from PINN import pl
+
+def aggregate_params_by_pseudotime(params, adata, param_names='g v2', timepoints=None,  pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
+    
+
+    pdt_bins = np.linspace(0,1,nbins+1)
+    pdt_label = (pdt_bins[1:] + pdt_bins[:-1])/2
+    adata.obs['pseudotime_bin'] = pd.cut(adata.obs[pseudotime_key], bins=nbins,
+                                                labels = pdt_label)
+
+
+    timepoints = adata.uns['pop']['t'] if timepoints is None else timepoints 
+    fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
+    axs = axs.flatten() if len(timepoints)>1 else [axs]
+    
+    y_smooths = []
+    for i,t in enumerate(timepoints):
+        y_col = 'Day%s_'%t + param_names
+        data = adata.obs[['pseudotime_bin']]
+        data[y_col] = params[i]
+        gdata = data.groupby("pseudotime_bin").agg({y_col:"mean"}).reset_index()
+
+        x = np.sort(gdata.pseudotime_bin.unique())
+        y = gdata[y_col].values
+
+        model2 = np.poly1d(np.polyfit(x, gdata[y_col], 7))
+
+        x_smooth = (x[1:] + x[:-1] )/2
+        y_smooth = (y[1:] + y[:-1] )/2
+
+        axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
+        axs[i].plot(x, model2(x), color='red', alpha=0.4)
+
+        y_smooths.append(y_smooth)
+
+    if return_y:
+        return y_smooths
+    else:
+        return fig, axs
+
 @torch.no_grad
 def continuous_params(pde_model, DataSet, 
                         param = 'g',
@@ -282,24 +323,48 @@ def param_vs_score(adata, obs_key, param, timepoints=None,timepoint_key='timepoi
 
 
 def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints=None, pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
-    
+    """
+    Project the parameters to the pseudotime and aggregate them by bins
 
-    pdt_bins = np.linspace(0,1,nbins+1)
+    Args
+    -------
+    adata : AnnData object, the adata with pseudotime and obs
+    params : list of np.ndarray, each array is the parameters for one timepoint
+    param_names : str, the names of the parameters, e.g. 'g v2'
+    timepoints : list of int, the timepoints for the parameters, if None, use the timepoints in adata.uns['pop']['t']
+    pseudotime_key : str, the key of the pseudotime in adata.obs, default 'pseudotime_scaled'
+    nbins : int, the number of bins to aggregate the pseudotime, default 100
+    return_y : bool, if True, return the smoothed y values, otherwise return the figure and axes
+    
+    Return:
+    -------
+    fig, axs : matplotlib figure and axes, the figure with the aggregated parameters    
+    
+    if return_y : y_smooths
+
+    """
+    pdt_max = adata.obs[pseudotime_key].max()
+    pdt_bins = np.linspace(0, pdt_max, nbins+1)
     pdt_label = (pdt_bins[1:] + pdt_bins[:-1])/2
     adata.obs['pseudotime_bin'] = pd.cut(adata.obs[pseudotime_key], bins=nbins,
                                                 labels = pdt_label)
 
 
     timepoints = adata.uns['pop']['t'] if timepoints is None else timepoints 
-    fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
-    axs = axs.flatten() if len(timepoints)>1 else [axs]
+
+    if not return_y:
+        fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
+        axs = axs.flatten() if len(timepoints)>1 else [axs]
     
     y_smooths = []
     for i,t in enumerate(timepoints):
         y_col = 'Day%s_'%t + param_names
-        data = adata.obs[['pseudotime_bin']]
+        data = adata.obs[['pseudotime_bin']].copy()
         data[y_col] = params[i]
         gdata = data.groupby("pseudotime_bin").agg({y_col:"mean"}).reset_index()
+
+        gdata[y_col] = gdata[y_col].interpolate(method='linear', limit_direction='both')
+        gdata[y_col] = gdata[y_col].fillna(method='bfill').fillna(method='ffill')
 
         x = np.sort(gdata.pseudotime_bin.unique())
         y = gdata[y_col].values
@@ -308,9 +373,9 @@ def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints
 
         x_smooth = (x[1:] + x[:-1] )/2
         y_smooth = (y[1:] + y[:-1] )/2
-
-        axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
-        axs[i].plot(x, model2(x), color='red', alpha=0.4)
+        if not return_y:
+            axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
+            axs[i].plot(x, model2(x), color='red', alpha=0.4)
 
         y_smooths.append(y_smooth)
 
