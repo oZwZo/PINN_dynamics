@@ -449,7 +449,7 @@ class pde_params_base(pl.LightningModule):
             return (ds, growth_local-drift, ds, du)
 
 class pde_params(pde_params_base):
-    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
+    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', R_weight = None, deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
         r"""
         default model : PINN prediction + NeuralODE simulation to estimate parameters
 
@@ -474,6 +474,7 @@ class pde_params(pde_params_base):
         
         self.time_sensitive = time_sensitive
         self.lr = lr
+        self.R_weight = 1 if R_weight is None else R_weight
         self.time_scale_factor = 5 if time_scale_factor is None else time_scale_factor
         self.D_penalty = 0.1 if D_penalty is None else D_penalty
 
@@ -548,7 +549,7 @@ class pde_params(pde_params_base):
 
         return log_density_loss_t
 
-    def forward_simulation(self, s, t, tp1):
+    def forward_simulation(self, s, t, tp1, ut):
 
         # divided by 5 to reduce the integration time
         t0 = t[0].item() / self.time_scale_factor
@@ -577,17 +578,35 @@ class pde_params(pde_params_base):
         
         return u_int, s_t, duds, growth, drift, diffuse
 
+    def residual_loss(self, s, t) -> torch.Tensor:
+        """
+        calculate the loss for collocation points, this loss inject the pde into the neural network
+        
+        Input
+        ------
+        s: the cell state, 
+        t: experimental time
+        """
+        with torch.set_grad_enabled(True):
+            s.requires_grad_(True)
+            t.requires_grad_(True)
+
+            dudt, growth, drift, diffuse = self.equation(s, t)
+            rhs = growth + drift + diffuse
+
+        return self.loss_fn(rhs.squeeze(), dudt.squeeze())
+        # return self.loss_fn(torch.log(rhs.squeeze()+1e-10), torch.log(dudt.squeeze()+1e-10))
+
+
     def training_step(self, train_batch, index):
         
         # cellstate, t, t+1, u_t, u_{t+1}
-        s, t, tp1, ut, utp1, deltax = train_batch
-
-        # divided by 5 to reduce the integration time
-        t0 = t[0].item() / self.time_scale_factor
-        t1 = tp1[0].item() / self.time_scale_factor 
-
-        device = s.device
-
+        s = train_batch['s']
+        t = train_batch['t']
+        tp1 =train_batch['tp1'] 
+        ut = train_batch['ut']
+        utp1 = train_batch['utp1']
+        deltax = train_batch['deltax']
 
         # loss 1 : boundary loss
         log_density_loss_t = self.forward_simulation(s, t, ut)
@@ -595,12 +614,13 @@ class pde_params(pde_params_base):
 
         
         # loss 2 : dynamics 
-        u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1)
+        u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1, ut)
 
         log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
 
 
         # loss 3 : constrain related loss 
+        R_loss = self.residual_loss(s, t)
         D_norm = self.restrict_D(s, t, exp=False)    # constrain D 
         v_loss = self.constrain_v(s,t,deltax)        # constrain v by local velocity   
         
@@ -627,10 +647,9 @@ class pde_params(pde_params_base):
             # self.log("residual_loss", Loss_r, on_epoch=True)
             # self.log("boundary_loss", Loss_b, on_epoch=True)
             self.log("population_loss", growth_loss.item(), on_epoch=True)
-            
-            self.log("log_boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
-            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
-            self.log("log_integrat_loss", log_sim_loss_tp1.item(), on_epoch=True)
+            self.log("boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            self.log("residual loss", R_loss.item(), on_epoch=True)
+            self.log("integrat_loss", log_sim_loss_tp1.item(), on_epoch=True)
             self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
 
         return total_loss
@@ -763,7 +782,64 @@ class pde_params_fastmode(pde_params):
         super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight)
         self.save_hyperparameters()
 
-    def constrain           
+    def training_step(self, train_batch, index):
+        
+        # cellstate, t, t+1, u_t, u_{t+1}
+        s = train_batch['s']
+        t = train_batch['t']
+        tp1 =train_batch['tp1'] 
+        ut = train_batch['ut']
+        utp1 = train_batch['utp1']
+        deltax = train_batch['deltax']
+        s_origin = train_batch['s_origin']
+        # loss 1 : boundary loss
+        log_density_loss_t = self.forward_density_loss(s, t, ut)
+        log_density_loss_tp1 = self.forward_density_loss(s, tp1, utp1)
+
+        
+        # loss 2 : dynamics Neural ODE
+        u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1, ut)
+
+        log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
+
+
+        # loss 3 : constrain related loss : use the original cell state
+        t_rand = torch.Tensor(s.shape[0],1).uniform_(t[0].item(), tp1[0].item()).float().to(s.device)
+        R_loss = self.residual_loss(s_origin, t_rand)       # constrain PINN
+        D_norm = self.restrict_D(s_origin, t, exp=False)    # constrain D 
+        v_loss = self.constrain_v(s_origin,t,deltax)        # constrain v by local velocity   
+        
+        # duds_loss = -1 * nn.functional.cosine_similarity(duds[-1], duds_tp1)
+        # constrain g by population size
+        if self.log_transform:
+            left = torch.exp(utp1).sum()
+            right = torch.exp(ut + growth[-1]).sum()
+            growth_loss = self.loss_fn(torch.log(left), torch.log(right))
+        else:
+            mass_gain = utp1.sum() -  ut.sum()
+            predicted_gain = growth[-1].sum()
+            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
+        
+
+        total_loss = log_density_loss_t + log_density_loss_tp1 + \
+                    2 * log_sim_loss_tp1 + \
+                    self.R_weight * R_loss +\
+                    self.D_penalty * D_norm + \
+                    self.deltax_weight * v_loss + \
+                    self.growth_weight * growth_loss
+
+
+        with torch.no_grad():
+            # self.log("residual_loss", Loss_r, on_epoch=True)
+            # self.log("boundary_loss", Loss_b, on_epoch=True)
+            self.log("population_loss", growth_loss.item(), on_epoch=True)
+            self.log("boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            self.log("residual loss", R_loss.item(), on_epoch=True)
+            self.log("integrat_loss", log_sim_loss_tp1.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
+    
 
 
 class Density_Transfer(nn.Module):

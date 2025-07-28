@@ -287,8 +287,6 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         # self.adata_full = self.adata.copy() save some space ?
         in_split = self.adata.obs["split"].values == self.split
         self.adata = self.adata[in_split].copy()
-        self.cellstate_full = self.cellstate.copy() # the original cellstate
-        self.u_b_full = self.u_b.copy()
 
         # subset
         self.cellstate = self.cellstate[in_split]
@@ -307,7 +305,8 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         # sample current t
         i_t = np.random.randint(0, self.n_timepoint-1)  # the i^th timepoint index
         i_tp1 = i_t + 1                                 # the index of next timepoint
-            
+        self.i_t = i_t                                  # update i_t
+
         # sample cellstates
         s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
         s = torch.from_numpy(self.cellstate[s_index]).float()
@@ -321,12 +320,11 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
         t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
         
-
         # the density of two consecutive 
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        return  s, t, t_p1, u_t, u_tp1, deltax
+        return {'s':s, 't':t, 'tp1':t_p1, 'ut':u_t, 'utp1':u_tp1, 'deltax':deltax}
 
 class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
     def __init__(self, *args, pseudobulk_key='pseudo_bulk', resolution=None, n_pseudobulk=None, **kwargs):
@@ -360,18 +358,28 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         self.n_pseudobulk = n_pseudobulk
         self.pseudobulk_aggregation()
 
+         ## compute the densities
+        # pay attention to the definition of self.cellstate
+        self.compute_density(self.density_funs)
+        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
+
 
     def pseudobulk_aggregation(self):
+
+        # copy the original 
+        self.cellstate_origin = self.cellstate.copy() # the original cellstate
+        self.u_b_origin = self.u_b.clone()
 
         print("="*20)
         print("Definining cell-state space")
         print("Generating pseudobulk to represent cell-state")
         pseudobulk_key = self.pseudobulk_key
 
-        if pseudobulk_key in adata.obs:
+        if pseudobulk_key in self.adata.obs_keys():
             seed = None
         else:
-            seed = np.randint(0,199)
+            seed = np.random.randint(0,199)
 
         adata = tl.super_resolution_pseudobulk(self.adata, resolution=self.resolution, n_pseudobulk=self.n_pseudobulk, key_added=pseudobulk_key, seed=seed) # leiden clustering
         self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
@@ -384,26 +392,28 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
 
-        ## compute the densities
-        # pay attention to the definition of self.cellstate
-        self.compute_density(self.density_funs)
-        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
-
+       
     def __getitem__(self, i):
-        s, t, t_p1, u_t, u_tp1, deltax = super().__getitem__(i)
+        data_dict = super().__getitem__(i)
+        # {'s':s, 't':t, 'tp1':t_p1, 'ut':u_t, 'utp1':u_tp1, 'deltax':deltax}
 
         # fit delta x on the original cell state
-        s_index = np.random.choice(np.arange(self.cellstate_full.shape[0]), size=(self.batchsize,), replace=False)
-        s_orin = torch.from_numpy(self.cellstate_full[s_index]).float()
-
-
-        i_t = torch.where(self.T_b == t[0].item())  # index of time
-        u_t = self.u_b[i_t, s_index]
+        s_index = np.random.choice(np.arange(self.cellstate_origin.shape[0]), size=(self.batchsize,), replace=False)
+        s_origin = torch.from_numpy(self.cellstate_origin[s_index]).float()
+        
+        u_t_origin = self.u_b_origin[self.i_t, s_index]
+        u_tp1_origin = self.u_b_origin[self.i_t+1, s_index]
 
         if self.deltax is not None:
             # delta x is not aggregated
             deltax = torch.from_numpy(self.deltax[s_index]).float()
-            
+
+        data_dict.update({
+            's_origin':s_origin, 'u_t_origin':u_t_origin, 'u_tp1_origin':u_tp1_origin,
+            'deltax':deltax,
+        })
+
+        return  data_dict
 
 
 

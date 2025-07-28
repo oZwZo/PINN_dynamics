@@ -58,6 +58,7 @@ class ExperimentConfig:
             'channels': getattr(model, 'channels', None),
             'activation_fn': getattr(model, 'activation_fn', None),
             'ode_tol': getattr(model, 'ode_tol', None),
+            'R_weight': getattr(model, 'R_weight', None),
             'D_penalty': getattr(model, 'D_penalty', None),
             'deltax_weight': getattr(model, 'deltax_weight', None),
             'weight_intensity': getattr(model, 'weight_intensity', None),
