@@ -313,14 +313,14 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         print("Definining cell-state space")
         print("Generating pseudobulk to represent cell-state")
 
-        adata = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
-        self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
-        X_df = pd.DataFrame(adata.obsm[self.cellstate_key][:,:self.n_dimension], 
-                            columns=['DM_%s'%i for i in range(self.n_dimension)])
-        X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
+        agg_ad = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
+        self.adata.uns[f'{pseudobulk_key}_settings'] = agg_ad.uns[f'{pseudobulk_key}_settings']
+        
+        # average cell state
+        self.cellstate = self.get_pseudobulk_vector(agg_ad, self.cellstate_key, pseudobulk_key)
+        # average Delta_x
+        self.deltax = self.get_pseudobulk_vector(agg_ad, self.deltax_key, pseudobulk_key)
 
-        pdb_cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
-        self.cellstate = pdb_cellstate
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
 
@@ -328,6 +328,20 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         # pay attention to the definition of self.cellstate
         self.compute_density(self.density_funs)
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
+
+    def get_pseudobulk_vector(self, agg_ad, x_key, pseudobulk_key):
+        """
+        aggregate multi-dimensional vector based on cell cluster label
+        """
+
+        # convert obsm to dataframe
+        X_df = pd.DataFrame(agg_ad.obsm[x_key][:,:self.n_dimension], 
+                            columns=['DM_%s'%i for i in range(self.n_dimension)])
+        X_df[pseudobulk_key] = pd.Series(agg_ad.obs[pseudobulk_key].values, dtype='str')
+        
+        return X_df.groupby(pseudobulk_key).agg("mean").values # average by label
+
 
 
 

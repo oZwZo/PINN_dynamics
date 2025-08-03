@@ -46,7 +46,7 @@ class ExperimentConfig:
             'cellstate_key': args.cellstate_key,
             'n_grid': args.n_grid,
             'n_dimension': args.n_dimension,
-            "kde_kws": {"bw_method":null},
+            "kde_kws": {"bw_method":None},
             'timepoint_idx': args.timepoint_idx,
             'deltax_key': args.deltax_key,
             'norm_time': args.norm_time,
@@ -127,6 +127,9 @@ class ExperimentConfig:
         # look for min loss
         ckpt_path = os.path.join(log_dir, ckpts[np.argmin(loss)])
         return ckpt_path
+    
+    def get_args(self):
+        return Namespace(**self.raw_args)
             
 
 
