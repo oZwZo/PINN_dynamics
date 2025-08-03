@@ -16,7 +16,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, *, timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, base_cellstate=None, **kwargs):
+    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -36,7 +36,7 @@ class HigDim_AnnDS(AnnDataset):
         base_cellstate : np array, the space to evaluate the density
 
         """
-        super().__init__(**kwargs)
+        super().__init__(AnnData, cellstate_key=cellstate_key, timepoint_key=timepoint_key, pop_dict=pop_dict, n_grid=n_grid, collocation_points=collocation_points,  log_transform=log_transform, norm_time=norm_time, resampling_indensity=resampling_indensity, resampling_rate=resampling_rate)
         
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
@@ -118,6 +118,7 @@ class HigDim_AnnDS(AnnDataset):
         ## compute the densities
         # pay attention to the definition of self.cellstate
         self.compute_density(density_funs)
+
 
     def compute_density(self, density_funs=None):
         r"""
@@ -226,31 +227,77 @@ class HigDim_AnnDS(AnnDataset):
 
 
 class TwoTimpepoint_AnnDS(HigDim_AnnDS):
-    def __init__(self, *args, batchsize=200, **kwargs):
+    def __init__(self, AnnData, split='train', cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5,   batchsize=200,  norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, nearby_cellstate=1, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
         r"""
         Dataset for high dimensional cellstate
         Each batch returns the cellstates, and their density in two consecutive timepoints
         
         Augments
         --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
         n_repeat : the output file path from script
         nearby_cellstate : the number of near (cell state)
         norm_Time : log-normalize the real timepoint 
 
-        Other params from AnnDataset:
-        --------
-        AnnData : annData, the scanpy 
-        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
-        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
-        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
-        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
         """
-        super().__init__(*args,**kwargs)
+        super().__init__(AnnData, cellstate_key=cellstate_key, timepoint_key=timepoint_key, timepoint_idx=timepoint_idx, n_dimension=n_dimension, nearby_cellstate=nearby_cellstate, norm_time=norm_time, deltax_key=deltax_key, density_funs=density_funs, kde_kws=kde_kws, base_cellstate=base_cellstate,  pop_dict=pop_dict, n_grid=n_grid, collocation_points=collocation_points,  log_transform=log_transform ,resampling_indensity=resampling_indensity, resampling_rate=resampling_rate)
         self.batchsize = batchsize
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
+        if split in ['train', 'val', 'test']:
+            self.split = split
+            if 'split' not in self.adata.obs_keys():
+                self.random_train_val_test_split()
+            
+            # subset cells belonging to the given split
+            self.subset_dataset()
+
+        elif split is None: 
+            self.split = None
+            print("all cells are used")
+
+        else:
+            raise ValueError("the input for kwarg `split` should be ['train', 'val', 'test' , None]")
+
+
+    def random_train_val_test_split(self):
+        r"""
+        random train, val, test spliting with the ratio 0.8:0.1:0.1
+        """
+        
+        print("random train, val, test spliting with the ratio 0.8:0.1:0.1")
+        print("training label saved to obs under key `split`")
+
+        n_cell = self.adata.shape[0]
+        train_val_cells = np.random.choice(self.adata.obs_names, size=int(n_cell*0.9), replace=False)
+        val_cells = np.random.choice(train_val_cells, size=int(len(train_val_cells)*0.1), replace=False)
+
+        self.adata.obs['split'] = 'test'
+        self.adata.obs.loc[train_val_cells, 'split'] = 'train'
+        self.adata.obs.loc[val_cells, 'split'] = 'val'
+
+    
+    def subset_dataset(self):
+        r"""
+        when a valid data split is given, subset the adata, cell state and density
+        """
+        # self.adata_full = self.adata.copy() save some space ?
+        in_split = self.adata.obs["split"].values == self.split
+        self.adata = self.adata[in_split].copy()
+
+        # subset
+        self.cellstate = self.cellstate[in_split]
+        self.deltax = self.deltax[in_split]
+        self.u_b = self.u_b[:, in_split]
+        self.s = torch.from_numpy(self.cellstate).float()
+        self.s = torch.cat([self.s]*len(self.popD['t'])).float()
+
     
     def __len__(self):
-        return int(self.cellstate.shape[0] // self.batchsize) * 9
+        return int(self.cellstate.shape[0] // self.batchsize)
 
     def __getitem__(self, i):
         
@@ -258,7 +305,8 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         # sample current t
         i_t = np.random.randint(0, self.n_timepoint-1)  # the i^th timepoint index
         i_tp1 = i_t + 1                                 # the index of next timepoint
-            
+        self.i_t = i_t                                  # update i_t
+
         # sample cellstates
         s_index = np.random.choice(np.arange(self.cellstate.shape[0]), size=(self.batchsize,), replace=False)
         s = torch.from_numpy(self.cellstate[s_index]).float()
@@ -272,12 +320,11 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         t = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_t]).float()
         t_p1 = torch.full(size=(self.batchsize,), fill_value=self.T_b[i_tp1]).float()
         
-
         # the density of two consecutive 
         u_t = self.u_b[i_t, s_index]
         u_tp1 = self.u_b[i_tp1, s_index]  # density of the t plus 1
 
-        return  s, t, t_p1, u_t, u_tp1, deltax
+        return {'s':s, 't':t, 'tp1':t_p1, 'ut':u_t, 'utp1':u_tp1, 'deltax':deltax}
 
 class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
     def __init__(self, *args, pseudobulk_key='pseudo_bulk', resolution=None, n_pseudobulk=None, **kwargs):
@@ -287,6 +334,11 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         
         Augments
         --------
+        AnnData : annData, the scanpy 
+        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
+        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
+        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
+        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
         n_repeat : the output file path from script
         nearby_cellstate : the number of near (cell state)
         norm_Time : log-normalize the real timepoint 
@@ -295,39 +347,71 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         -------
         n_pseudobulk : int, defult None -> adata.shape[0] / 20, the number of pseudo bulk to end with
         pseudobulk_key : str, default 'pseudo_bulk'
-        resolution : int, default None -> 40, the resolution pass to leiden algorithm
-
-        Other params from AnnDataset:
-        --------
-        AnnData : annData, the scanpy 
-        cellstate_key : str, the obsm key, the lower dimension representation on which we will use to compute density
-        timepoint_key : str, the obs key that indicate the experimental time the cells are collected from
-        pop_dict : dict, the dictionary we use to pass population statistics including collected timepoint, mean ,variation
-        log_transform : bool, default True, whether the population size will be log transformed to reduce the magnitude of the data
+        resolution : int, default None -> 40, the resolution pass to leiden algorithmlao
         """
         super().__init__(*args,**kwargs)
         
         
         print("Using FAST mode")
+        self.pseudobulk_key = pseudobulk_key
+        self.resolution = resolution
+        self.n_pseudobulk = n_pseudobulk
+        self.pseudobulk_aggregation()
+
+         ## compute the densities
+        # pay attention to the definition of self.cellstate
+        self.compute_density(self.density_funs)
+        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+
+
+
+    def pseudobulk_aggregation(self):
+
+        # copy the original 
+        self.cellstate_origin = self.cellstate.copy() # the original cellstate
+        self.u_b_origin = self.u_b.clone()
+
         print("="*20)
         print("Definining cell-state space")
         print("Generating pseudobulk to represent cell-state")
+        pseudobulk_key = self.pseudobulk_key
 
-        agg_ad = tl.super_resolution_pseudobulk(self.adata, resolution=resolution, n_pseudobulk=n_pseudobulk, key_added=pseudobulk_key) # leiden clustering
-        self.adata.uns[f'{pseudobulk_key}_settings'] = agg_ad.uns[f'{pseudobulk_key}_settings']
-        
-        # average cell state
-        self.cellstate = self.get_pseudobulk_vector(agg_ad, self.cellstate_key, pseudobulk_key)
-        # average Delta_x
-        self.deltax = self.get_pseudobulk_vector(agg_ad, self.deltax_key, pseudobulk_key)
+        if pseudobulk_key in self.adata.obs_keys():
+            seed = None
+        else:
+            seed = np.random.randint(0,199)
+
+        adata = tl.super_resolution_pseudobulk(self.adata, resolution=self.resolution, n_pseudobulk=self.n_pseudobulk, key_added=pseudobulk_key, seed=seed) # leiden clustering
+        self.adata.uns[f'{pseudobulk_key}_settings'] = adata.uns[f'{pseudobulk_key}_settings']
+        X_df = pd.DataFrame(adata.obsm[self.cellstate_key][:,:self.n_dimension], 
+                            columns=['DM_%s'%i for i in range(self.n_dimension)])
+        X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
 
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
 
-        ## compute the densities
-        # pay attention to the definition of self.cellstate
-        self.compute_density(self.density_funs)
-        self.u_b = self.u_b.reshape(self.n_timepoint, -1)
+       
+    def __getitem__(self, i):
+        data_dict = super().__getitem__(i)
+        # {'s':s, 't':t, 'tp1':t_p1, 'ut':u_t, 'utp1':u_tp1, 'deltax':deltax}
+
+        # fit delta x on the original cell state
+        s_index = np.random.choice(np.arange(self.cellstate_origin.shape[0]), size=(self.batchsize,), replace=False)
+        s_origin = torch.from_numpy(self.cellstate_origin[s_index]).float()
+        
+        u_t_origin = self.u_b_origin[self.i_t, s_index]
+        u_tp1_origin = self.u_b_origin[self.i_t+1, s_index]
+
+        if self.deltax is not None:
+            # delta x is not aggregated
+            deltax = torch.from_numpy(self.deltax[s_index]).float()
+
+        data_dict.update({
+            's_origin':s_origin, 'u_t_origin':u_t_origin, 'u_tp1_origin':u_tp1_origin,
+            'deltax':deltax,
+        })
+
+        return  data_dict
 
 
     def get_pseudobulk_vector(self, agg_ad, x_key, pseudobulk_key):

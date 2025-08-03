@@ -212,7 +212,13 @@ def truncated_clustermap(matrix,
     col_colors = [ y_colors, x_colors ]
 
     # Prepare matrix for display
-    show_matrix = np.log(matrix + 1e-30) if show_log else matrix
+    # show_matrix = np.log(matrix + 1e-30) if show_log else matrix
+    if show_log:
+        matrix_raw = matrix.copy()
+        matrix_log = np.log(matrix+1e-20)
+        show_matrix = np.where(matrix_raw == 0, 0, matrix_log-matrix_log.min())
+    else:
+        show_matrix = matrix
     
     
     # Create clustermap with column colors

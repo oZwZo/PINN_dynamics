@@ -327,7 +327,7 @@ def plot_de_genes_with_rate(
     )
     
     # Style adjustments
-    ax.grid(True, alpha=0.3)
+    # ax.grid(True, alpha=0.3)
     ax2.tick_params(axis='y', colors='navy')
     
     return ax, ax2

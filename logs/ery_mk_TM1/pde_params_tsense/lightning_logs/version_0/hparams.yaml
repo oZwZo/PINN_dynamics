@@ -1,0 +1,32 @@
+D_channels:
+- 9
+- 32
+- 32
+- 8
+D_penalty: null
+activation_fn: Tanh
+channels:
+- 9
+- 32
+- 32
+- 1
+collapse_D: true
+collapse_v: false
+deltax_weight: 0.01
+g_channels:
+- 9
+- 32
+- 32
+- 1
+growth_weight: null
+lr: 0.0003
+ode_tol: 0.0001
+pop_weight: null
+time_scale_factor: 5.0
+time_sensitive: true
+v_channels:
+- 9
+- 32
+- 32
+- 8
+weight_intensity: 3.0

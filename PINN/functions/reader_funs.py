@@ -383,6 +383,10 @@ def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palanti
     """
     the Key function defines the noise sampling process 
     given the starting point i
+
+    Return:
+    -----
+    delta_X, neighbor_ls
     """
 
     connectivities = adata.obsp['connectivities'].copy()
@@ -525,7 +529,7 @@ def make_coord_adata(adata, cellstate_key, n_dimension, v = None):
 
     return new_ad
 
-def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_added='pseudo_bulk'):
+def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_added='pseudo_bulk', seed=42):
     r"""
     Use super-high resolution leiden algorithm to generate pseudo-bulk
     
@@ -547,11 +551,11 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
     magnitude_of = lambda x: int(np.log2(x))
 
     if key_added not in adata.obs_keys():
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=42)
+        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
 
     while magnitude_of(adata.obs[key_added].nunique()) < magnitude_of(n_pseudobulk):
         resolution=resolution*5
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added)
+        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
         
 
     print(f"getting {adata.obs['pseudo_bulk'].nunique()} pseudobulk with resolution {resolution}")
