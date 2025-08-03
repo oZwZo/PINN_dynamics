@@ -916,6 +916,59 @@ class pde_params_fastmode(pde_params):
 
         return total_loss
     
+class log_pde_params(pde_params):
+    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
+        r"""
+        mlp u theta
+        
+        Arguments:
+        -------------
+        channel : the number of MLP channels of the Behavior function
+        [g, v, D]_channel : the number of MLP channels of the Behavior function
+        collapse_[D,v] : merge the multi-channel output into 1 channel, 
+                         which controls the complexity of the pde term.
+        
+        kwargs 
+        -------
+        u_theta : the neural netowrk surrogate of u
+        lr: float, the learning rate
+        optim_class : str, the optimizer used
+        D_penalty : float , default None the weight for penalizing D
+
+
+        """
+        super().__init__(channels=channels, collapse_D = collapse_D, collapse_v = collapse_v, g_channels=g_channels, v_channels=v_channels, D_channels=D_channels, time_sensitive=True, lr=lr, ode_tol=ode_tol, activation_fn=activation_fn, D_penalty = D_penalty, weight_intensity=weight_intensity, deltax_weight=deltax_weight, time_scale_factor=time_scale_factor, pop_weight=pop_weight)
+        self.save_hyperparameters()
+        self.log_transform = True
+
+    def equation(self, s, t) -> tuple:
+        """
+        the log Reaction-Advection Diffusion equation
+        """
+        logu = self.u(s,t)
+        D = self.D(s,t)
+        v = self.v(s,t)
+        g = self.g(s,t)
+
+        # first-order derivative
+        dloguds = self.gradient_of(logu.sum(), s)
+        dvds = self.gradient_of(v.sum(), s)
+        dDds = self.gradient_of(D.sum(), s)
+
+        # second-order derivative
+        dlogudss = self.gradient_of(dloguds.sum(), s)
+        if dlogudss is None:
+            dlogudss = dloguds # becomes a scaler
+
+        duDds = self.mul(dloguds, dDds)
+        
+        diffusion = self.mul(D, dlogudss) + self.mul(D, duDds)
+
+        # drift : ∇v + (∇logu·v) 
+        drift = dvds.sum(dim=1) + self.mul(dloguds, v)
+        growth = g
+        
+        return None, growth, drift, diffusion
 
 
 class Density_Transfer(nn.Module):
