@@ -379,7 +379,83 @@ def _sample_by_distance(dist_array, candidate_idx, alpha=None, repeat=1):
         neighbor_idx = neighbor_idx[0]
     return neighbor_idx, p
 
-def sample_deltax(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=True, temperature=1):
+
+def sample_deltax(adata,transition_matrix=None, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=True, temperature=1):
+    """
+    the Key function defines the noise sampling process 
+    given the starting point i
+
+    Return:
+    -----
+    delta_X, neighbor_ls
+    """
+
+    if transition_matrix is None:
+        delta_X, neighbor_ls = sample_deltax_from_knn(adata, max_degree=max_degree, k=k, xkey=xkey, pseudotimekey=pseudotimekey, progressbar=progressbar, temperature=temperature)
+    
+    else:
+        delta_X, neighbor_ls = sample_deltax_from_transition(adata, transition_matrix,xkey=xkey)
+
+    return delta_X, neighbor_ls
+        
+
+def sample_deltax_from_transition(adata, transition_matrix,xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False):
+    r"""
+    the Key function defines the delta-X sampling process 
+    given the transition matrix, then sample the delta x
+
+    Input:
+    -----
+    transition_matrix : nd array of shape (n_cell, n_cell), i.e : cell rank transition matrix
+    xkey : obsm_key or layer_key of the adata, from which space we sample the delta x
+
+
+    Return:
+    -----
+    delta_X, neighbor_ls
+
+    Example:
+    -----
+    >>> ck = cr.kernels.ConnectivityKernel(adata)
+    >>> ck.compute_transition_matrix()
+    >>> pk = cr.kernels.PseudotimeKernel(adata, time_key="palantir_pseudotime")
+    >>> pk.compute_transition_matrix()
+    >>> combined_kernel = 0.8 * pk + 0.2 * ck
+    >>> combined_kernel.compute_transition_matrix()
+    >>> adata.obsp['combined_transition_matrix'] = combined_kernel.transition_matrix
+    """
+
+    def prograss_(x, turn_on=progressbar):
+        if turn_on:
+            return tqdm(x)
+        else:
+            return x
+    
+    pdt = adata.obs[pseudotimekey].values
+
+    if xkey is None:
+        X = adata.X
+    elif xkey in adata.obsm_keys():
+        X = adata.obsm[xkey].copy()
+    elif xkey in adata.layers():
+        X = adata.layers[xkey].copy()
+
+    delta_X = []
+    neighbor_ls = []
+
+    T_M = transition_matrix 
+    for i in prograss_(range(X.shape[0]), progressbar):
+        nz_id = np.where(T_M[0].A[0]!=0)[0]   # non zero cell idx
+        prob = T_M[0].A[0, nz_id].reshape(1,-1) # (1,knn)
+        neighbor_ls.append(nz_id)
+
+        weighted_dx =prob@(X[nz_id] - X[i]) #(1,nn) * (nn, n_dim)
+        delta_X.append( weighted_dx.squeeze()) 
+    
+    return np.stack(delta_X), np.array(neighbor_ls)
+
+
+def sample_deltax_from_knn(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False, temperature=1):
     """
     the Key function defines the noise sampling process 
     given the starting point i
@@ -511,6 +587,7 @@ def make_coord_adata(adata, cellstate_key, n_dimension, v = None):
     new_ad.obsp['distances'] = adata.obsp['distances'].copy()
     new_ad.layers['cellstate'] = new_ad.X.copy()
     new_ad.obsm["X_pca"] = adata.obsm["X_pca"]
+    new_ad.obsm["X_pca_harmony"] = adata.obsm["X_pca_harmony"]
     new_ad.obsm["X_umap"] = adata.obsm["X_umap"]
     
     # pop info

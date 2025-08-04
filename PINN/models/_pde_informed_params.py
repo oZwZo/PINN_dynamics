@@ -609,8 +609,8 @@ class pde_params(pde_params_base):
         deltax = train_batch['deltax']
 
         # loss 1 : boundary loss
-        log_density_loss_t = self.forward_simulation(s, t, ut)
-        log_density_loss_tp1 = self.forward_simulation(s, tp1, utp1)
+        log_density_loss_t = self.forward_density_loss(s, t, ut)
+        log_density_loss_tp1 = self.forward_density_loss(s, tp1, utp1)
 
         
         # loss 2 : dynamics 

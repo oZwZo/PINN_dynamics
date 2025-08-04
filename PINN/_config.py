@@ -50,7 +50,8 @@ class ExperimentConfig:
             'timepoint_idx': args.timepoint_idx,
             'deltax_key': args.deltax_key,
             'norm_time': args.norm_time,
-        }
+            'knn_volume' : args.knn_volume,
+        } 
 
     def _get_model_config(self, model) -> Dict[str, Any]:
         return {

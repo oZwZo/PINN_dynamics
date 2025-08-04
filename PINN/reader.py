@@ -16,7 +16,7 @@ from ._base_Dataset import AnnDataset, MeshGrid, Processed_baseDS
 
 
 class HigDim_AnnDS(AnnDataset):
-    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5, nearby_cellstate=1, norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
+    def __init__(self, AnnData, cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5, knn_volume= False, nearby_cellstate=1, norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
         r"""
         High Dimensional Cell state Dataset for trajectory indepdent modeling
 
@@ -38,6 +38,7 @@ class HigDim_AnnDS(AnnDataset):
         """
         super().__init__(AnnData, cellstate_key=cellstate_key, timepoint_key=timepoint_key, pop_dict=pop_dict, n_grid=n_grid, collocation_points=collocation_points,  log_transform=log_transform, norm_time=norm_time, resampling_indensity=resampling_indensity, resampling_rate=resampling_rate)
         
+        self.knn_volume = knn_volume
         self.n_dimension = n_dimension
         self.nearby_cellstate = nearby_cellstate
         self.deltax_key = deltax_key
@@ -119,6 +120,39 @@ class HigDim_AnnDS(AnnDataset):
         # pay attention to the definition of self.cellstate
         self.compute_density(density_funs)
 
+    def compute_volume(self, dim=2, smooth=True):
+        r"""
+        Compute the volume of each cell from KNN distances, assume the inner dimension is 2 and the min distance to represent radius
+        """
+        print("Dataset : Use KNN distances to compute the volume and rescale density")
+        
+        dist = self.adata.obsp['distances'].copy()
+        conn = self.adata.obsp['connectivities'].copy()
+        s = self.cellstate
+
+        Vol = []
+        for i in range(dist.shape[0]):
+
+            ### From the specified cell state space 
+            DM_dist = np.sum((s[conn[i].indices] - s[[i]])**2,axis=1)*0.5
+            min_DMdist = DM_dist[np.nonzero(DM_dist)].min()
+            max_DMdist = DM_dist.max()
+
+            # Vol.append(np.sqrt(min_DMdist*max_DMdist))
+            Vol.append( DM_dist.mean() )
+
+        vol = np.array(Vol)
+        thres = np.quantile(Vol, 0.99) # simply to remove outlier
+        vol_clip = np.clip(vol, 0, thres)
+        
+        ## volume smoothing
+        if smooth:
+            print("Dataset : smoothing KNN derived single-cell volume..")
+            knn_idx = [conn[i].indices for i in range(s.shape[0])]
+            vol_smooth = [vol_clip[knn_id].mean() for knn_id in knn_idx]
+            vol_clip = np.array(vol_smooth)
+        
+        return vol_clip
 
     def compute_density(self, density_funs=None):
         r"""
@@ -136,16 +170,21 @@ class HigDim_AnnDS(AnnDataset):
         u_scale = []
 
         if density_funs is None:
-            print("Computing density :")
-            print("="*20)
-            print("`density_funs` not specified, use gaussian kde")
+            print("\n"+"="*20)
+            print("Dataset : Computing density :")
+            print("\t `density_funs` not specified, default estimator gaussian kde")
             use_gausian = True
             density_funs = []
         else:
-            print("Computing density :")
-            print("="*20)
+            print("\n"+"="*20)
+            print("Dataset : Computing density :")
             print(f"using pre-defined density fun `{type(density_funs[0])}`")
             use_gausian = False
+
+        if self.knn_volume:
+            self.volume = self.compute_volume()
+        else:
+            self.volume = np.ones_like(self.adata.shape[0])
 
         for tb_idx, t_b in enumerate(self.popD['t']):
             
@@ -167,12 +206,13 @@ class HigDim_AnnDS(AnnDataset):
             # u_min = np.min(u[u!=0])
             if self.log_transform:
                 threshold = np.quantile(u, q=[1e-3,1-1e-3])
-                u = np.clip(u, *threshold)
+                u = np.clip(u, *threshold) + np.log(self.volume)
                 u_sum = np.exp(u).sum()
                 scaler = np.log(self.popD['mean'][tb_idx] / u_sum)
                 u = u - np.log(u_sum)
                 ub_ls.append(u + np.log(self.popD['mean'][tb_idx]))
             else:
+                u *= self.volume
                 u_sum = u.sum()
                 u = np.where(u!=0, u, 1e-10) # replace 0 with 0.1* u_min
                 scaler = self.popD['mean'][tb_idx] / u_sum
@@ -227,7 +267,7 @@ class HigDim_AnnDS(AnnDataset):
 
 
 class TwoTimpepoint_AnnDS(HigDim_AnnDS):
-    def __init__(self, AnnData, split='train', cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5,   batchsize=200,  norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, nearby_cellstate=1, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
+    def __init__(self, AnnData, split='train', cellstate_key='cellstate', timepoint_key='timepoint_tx_days', timepoint_idx=None, n_dimension=5, knn_volume= False,  batchsize=200,  norm_time=False, deltax_key=None, density_funs=None, kde_kws={}, nearby_cellstate=1, base_cellstate=None,  pop_dict=None, n_grid=300, collocation_points=600,  log_transform=False ,resampling_indensity=0.5, resampling_rate=0.5):
         r"""
         Dataset for high dimensional cellstate
         Each batch returns the cellstates, and their density in two consecutive timepoints
@@ -241,9 +281,9 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
         n_repeat : the output file path from script
         nearby_cellstate : the number of near (cell state)
         norm_Time : log-normalize the real timepoint 
-
+        knn_volume : boolen, whether to use the volume of the knn graph to rescale the density
         """
-        super().__init__(AnnData, cellstate_key=cellstate_key, timepoint_key=timepoint_key, timepoint_idx=timepoint_idx, n_dimension=n_dimension, nearby_cellstate=nearby_cellstate, norm_time=norm_time, deltax_key=deltax_key, density_funs=density_funs, kde_kws=kde_kws, base_cellstate=base_cellstate,  pop_dict=pop_dict, n_grid=n_grid, collocation_points=collocation_points,  log_transform=log_transform ,resampling_indensity=resampling_indensity, resampling_rate=resampling_rate)
+        super().__init__(AnnData, cellstate_key=cellstate_key, timepoint_key=timepoint_key, timepoint_idx=timepoint_idx, knn_volume=knn_volume, n_dimension=n_dimension, nearby_cellstate=nearby_cellstate, norm_time=norm_time, deltax_key=deltax_key, density_funs=density_funs, kde_kws=kde_kws, base_cellstate=base_cellstate,  pop_dict=pop_dict, n_grid=n_grid, collocation_points=collocation_points,  log_transform=log_transform ,resampling_indensity=resampling_indensity, resampling_rate=resampling_rate)
         self.batchsize = batchsize
         self.u_b = self.u_b.reshape(self.n_timepoint, -1)
 
@@ -257,7 +297,7 @@ class TwoTimpepoint_AnnDS(HigDim_AnnDS):
 
         elif split is None: 
             self.split = None
-            print("all cells are used")
+            print("Dataset : all cells are used")
 
         else:
             raise ValueError("the input for kwarg `split` should be ['train', 'val', 'test' , None]")
