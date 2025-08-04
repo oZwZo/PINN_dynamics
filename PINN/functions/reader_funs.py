@@ -624,15 +624,24 @@ def super_resolution_pseudobulk(adata, resolution=200, n_pseudobulk=None, key_ad
         n_pseudobulk = adata.shape[0] / 20 
     if resolution is None:
         resolution = 200 
+
+    ncell = adata.shape[0]
+    if ncell > 1e4:
+        try:
+            import rapids_singlecell as rsc 
+            leiden = rsc.tl.leiden
+            print("rapids_singlecell detected, rsc leiden is used to accelarate")
+        except:
+            leiden = sc.tl.leiden
     
     magnitude_of = lambda x: int(np.log2(x))
 
     if key_added not in adata.obs_keys():
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
+        leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
 
     while magnitude_of(adata.obs[key_added].nunique()) < magnitude_of(n_pseudobulk):
         resolution=resolution*5
-        sc.tl.leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
+        leiden(adata, resolution=resolution, key_added=key_added, random_state=seed)
         
 
     print(f"getting {adata.obs['pseudo_bulk'].nunique()} pseudobulk with resolution {resolution}")

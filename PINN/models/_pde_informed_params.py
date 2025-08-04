@@ -656,85 +656,8 @@ class pde_params(pde_params_base):
 
 
     def validation_step(self, val_batch, index):
-        # cellstate, t, t+1, u_t, u_{t+1}
-        s, t, tp1, ut, utp1, deltax = val_batch
-
-        # divided by 5 to reduce the integration time
-        t0 = t[0].item() / self.time_scale_factor
-        t1 = tp1[0].item() / self.time_scale_factor 
-
-        device = s.device
-
-        # loss 1 : forward prediction loss
-        with torch.set_grad_enabled(True):
-            s.requires_grad_(True)
-            log_u_pred = self.u(s,t)
-            log_utp1_pred = self.u(s,tp1)
-            # duds_init = self.gradient_of(torch.exp(log_u_pred).sum(), s)
-            # duds_tp1 = self.gradient_of(torch.exp(log_utp1_pred).sum(), s)
-
-        if self.log_transform:
-            # the ut, utp1 are log-density
-            ub_loss = self.loss_fn(torch.exp(ut.squeeze()), (torch.exp(log_u_pred).squeeze()))
-            log_density_loss_t = self.loss_fn(ut, log_u_pred)
-            log_density_loss_tp1 = self.loss_fn(utp1, log_utp1_pred)
-        else:
-            ub_loss = self.loss_fn(ut.squeeze(), (torch.exp(log_u_pred).squeeze()))
-            log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
-            log_density_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), log_utp1_pred)
-
-        
-        # loss 2 : dynamics 
-        with torch.set_grad_enabled(True):
-            # init_condition 
-            zeros = torch.zeros_like(ut)
-            duds_init = torch.zeros_like(s)
-            init_condition = (ut, s, duds_init, zeros.clone(), zeros.clone(), zeros.clone())
-
-            step_size = np.around((t1 - t0)/15, decimals=1).item() 
-            step_size = step_size if step_size > 0 else 0.05
-            step_size = min(step_size, 0.4)
-
-            u_int, s_t, duds, growth, drift, diffuse = odeint_adjoint(
-                            self,
-                            y0 = init_condition,
-                            t = torch.tensor([t0, t1]).type(torch.float32).to(device),
-                            atol=self.ode_tol,
-                            rtol=self.ode_tol,
-                            method='dopri5',
-                            adjoint_options={'norm':'seminorm'},
-                        )
-
-        # boundary u of  the next timepoint
-        if self.log_transform:
-            # integration loss (log)
-            utp1_loss = self.loss_fn(torch.exp(u_int[-1]), torch.exp(utp1))
-            u_int = nn.functional.relu(u_int)
-            log_utp1_loss = self.loss_fn(utp1, u_int[-1])
-            # growth loss (log)
-            left = torch.exp(utp1).sum()
-            right = torch.exp(ut + growth[-1]).sum()
-            growth_loss = self.loss_fn(torch.log(left), torch.log(right))
-
-        else:
-            # integration loss
-            utp1_loss = self.loss_fn(u_int[-1], utp1)
-            u_int = nn.functional.relu(u_int)
-            log_utp1_loss = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10))
-            # growth loss
-            mass_gain = utp1.sum() -  ut.sum()
-            predicted_gain = growth[-1].sum()
-            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
-
-        
-        # total_loss = log_density_loss_t + log_density_loss_tp1 + 2 * log_utp1_loss + self.D_penalty * D_norm + self.deltax_weight * v_loss + self.growth_weight * growth_loss
-
-        with torch.no_grad():
-            self.log("val_u_forward_loss",  (log_density_loss_t+log_density_loss_tp1).item(),  on_epoch=True)
-            self.log("integrat_loss", utp1_loss.item(),  on_epoch=True)
-            self.log("val_integrat_loss", log_utp1_loss.item(), on_epoch=True)
-            self.log("val growth loss", growth_loss, on_epoch=True, prog_bar=True)
-
+        loss = self.training_step(val_batch)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
         
     def stratified_ode(self, t, states):
         """
