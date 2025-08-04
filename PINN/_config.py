@@ -129,6 +129,9 @@ class ExperimentConfig:
         # look for min loss
         ckpt_path = os.path.join(log_dir, ckpts[np.argmin(loss)])
         return ckpt_path
+    
+    def get_args(self):
+        return Namespace(**self.raw_args)
             
 
 

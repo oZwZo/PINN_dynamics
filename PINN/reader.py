@@ -427,8 +427,6 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
                             columns=['DM_%s'%i for i in range(self.n_dimension)])
         X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
 
-        pdb_cellstate = X_df.groupby(pseudobulk_key).agg("mean").values
-        self.cellstate = pdb_cellstate
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
 
@@ -454,6 +452,20 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
         })
 
         return  data_dict
+
+
+    def get_pseudobulk_vector(self, agg_ad, x_key, pseudobulk_key):
+        """
+        aggregate multi-dimensional vector based on cell cluster label
+        """
+
+        # convert obsm to dataframe
+        X_df = pd.DataFrame(agg_ad.obsm[x_key][:,:self.n_dimension], 
+                            columns=['DM_%s'%i for i in range(self.n_dimension)])
+        X_df[pseudobulk_key] = pd.Series(agg_ad.obs[pseudobulk_key].values, dtype='str')
+        
+        return X_df.groupby(pseudobulk_key).agg("mean").values # average by label
+
 
 
 

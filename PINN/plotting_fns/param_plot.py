@@ -39,6 +39,11 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cel
     cell_of_t : bool, default to True, only visualize cells of each timepoints. 
                 If set to False, all cells will be shown in each panels.
 
+    Return
+    ---------
+    fig, axs
+
+
     Example
     ----------
     >>> param = 'g'
