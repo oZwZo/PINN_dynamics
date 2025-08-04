@@ -70,7 +70,7 @@ def params_in_umap(adata, prediction, timepoints=None, param='u', copy=True, cel
     for i, t in enumerate(timepoints):
         adata.obs[f'Day{t}_{param}'] = prediction[i]
 
-    fig, axs = umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints, cell_of_t=cell_of_t, subplot_kws=subplot_kws, umap_kws=umap_kws)
+    fig, axs = umap_by_time(lambda x: f'Day{x}_{param}', adata, timepoints, time_mask=cell_of_t, subplot_kws=subplot_kws, umap_kws=umap_kws)
     
     if len(timepoints) == 1:
         axs = [axs]

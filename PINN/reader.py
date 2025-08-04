@@ -387,6 +387,7 @@ class TwoTimpepoint_AnnDS_fastmode(TwoTimpepoint_AnnDS):
                             columns=['DM_%s'%i for i in range(self.n_dimension)])
         X_df[pseudobulk_key] = pd.Series(adata.obs[pseudobulk_key].values, dtype='str')
 
+        self.cellstate = X_df[pseudobulk_key].values
         self.s = torch.from_numpy(self.cellstate).float()
         self.s = torch.cat([self.s]*len(self.popD['t'])).float()
 

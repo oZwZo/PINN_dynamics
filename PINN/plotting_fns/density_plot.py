@@ -15,7 +15,7 @@ import matplotlib.animation as animation
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 
-def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subplot_kws=None, umap_kws=None):
+def umap_by_time(attribute, anndata, timepoints=timepoints, time_mask=True,  subplot_kws=None, umap_kws=None):
     r"""
     A very basic functions plotting cellular attribute in the umap and stratified by time
 
@@ -23,8 +23,7 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subp
     ----------
     attribute : str or callable, a function of time or a obs_key of the anndata
     anndata : anndata
-    cell_of_t : bool, default to True, only visualize cells of each timepoints. 
-                If set to False, all cells will be shown in each panels.
+    time_mask : bool or str, default to True. If bool, only visualize cells of each timepoint (True) or show all cells in each panel (False). If str, use the given obs key for timepoint selection.
     timepoints : iterable, list of real-time , like the number of columns
 
     Return
@@ -60,7 +59,10 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, cell_of_t=True, subp
         default_umap_kws.update(umap_kws)
         umap_kws = default_umap_kws
 
-    timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
+    if type(time_mask) == str:
+        timepoint_key = time_mask
+    else:
+        timepoint_key = 'timepoint_tx_days' if 'timepoint_tx_days' in anndata.obs_keys() else 'timepoint'
     for t in timepoints:
         if len(timepoints) == 1:
             ax = axs
