@@ -19,14 +19,14 @@ from matplotlib.patches import Patch
 
 from matplotlib.backends.backend_pdf import PdfPages
 
-os.chdir("/home/wergillius/Project/PINN_dynamics")
+os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
 
 def savefig(fig, name):
     fig.savefig(f'{plot_save}/{name}.png', transparent=True, bbox_inches='tight', dpi=200)
 
 
 
-ckpt_path = "logs/tom_pos-DM_scaled_n[0, 2, 4, 6, 8]/pde_params_tsense/lightning_logs/version_3/checkpoints/epoch=22-total_loss=10.60172653.ckpt"
+ckpt_path = "logs/tom_pos-DM_scaled_n[0, 1, 2, 3, 4, 6, 8]/pde_params_tsense/lightning_logs/version_4/checkpoints/epoch=95-total_loss=1.33532071.ckpt"
 if __name__ == '__main__':
     ckpt_path = sys.argv[1] if not sys.argv[1].endswith("json") else ckpt_path
     
@@ -39,7 +39,8 @@ use_device="cuda:3"
 
 date = time.strftime("%b%d")
 result_dir = "results/" + "/".join(ckpt_path.split("/")[1:3]) + f"_{date}_onbase"
-result_base = re.match(r".*/(version_\d{1,2})/.*", ckpt_path).group(1)
+# result_base = re.match(r".*/(version_\d{1,2})/.*", ckpt_path).group(1)
+result_base = ckpt_path.split("/")[4]
 
 if not os.path.exists(result_dir):
     try:
@@ -158,7 +159,7 @@ for param in ['g', 'D']:
 
     fig_param.savefig(f'{plot_save}/{param}.png', transparent=True, bbox_inches='tight', dpi=200)
 
-nabla_v = pde_model.predict_param(DS_full, param='v');
+nabla_v = pde_model.predict_nabla_v(DS_full).sum(axis=-1);
 fig_v1, axs_v = PINN.pl.params_in_umap(t7_ad, nabla_v, param=r'$\nabla v$', cell_of_t=False);
 
 

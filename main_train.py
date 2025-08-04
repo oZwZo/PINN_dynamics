@@ -44,6 +44,7 @@ optional_args.add_argument("--schedule_lr", type=str, required=False, default="C
 optional_args.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 optional_args.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
 optional_args.add_argument("--timepoint_idx", type=str, required=False, default=None, help='the number of time point to train the model')
+optional_args.add_argument("--knn_volume", type=str, required=False, default=False, help='Whether to correct single-cell density estimate with KNN distance')
 optional_args.add_argument("--batch_size", type=int, required=False, default=200, help='the number of nearby cell state to include within a minibatch')
 optional_args.add_argument("--bw", type=float, required=False, default=None, help='the band width parameter , pass to bw_method for gaussian_kde')
 optional_args.add_argument("--tol", type=float, required=False, default=1e-4, help='the tolerance of error , used to control the precision and speed of ode integral')
@@ -90,7 +91,8 @@ adata = sc.read_h5ad(h5_path)
 if args.timepoint_idx is None:
     args.timepoint_idx = len(adata.uns['pop']['t'])
 else:
-    args.timepoint_idx = eval(args.timepoint_idx)
+    args.timepoint_idx = eval(args.timepoint_idx) if isinstance(args.timepoint_idx,str) else args.timepoint_idx
+
 
 if args.log_name:
     log_name = args.log_name
@@ -114,13 +116,14 @@ if args.model == "pde_params":
     max_h = max(hidden_channels)
     model_kws = dict(v_channels = [n_dim] + hidden_channels + [args.n_dimension],
                     g_channels = [n_dim] + hidden_channels + [1],
-                    D_channels = [n_dim] + hidden_channels + [args.n_dimension])
+                    D_channels = [n_dim] + hidden_channels + [1],#[args.n_dimension]
+                    )
     channels = [args.n_dimension + 1 ] + hidden_channels + [1]
 else:
     model_kws = {}
 
 model = model_class(
-        lr=3e-4,
+        lr=args.lr,
         channels = channels,
         activation_fn='Tanh',
         ode_tol = args.tol,
@@ -151,20 +154,21 @@ if args.pretrained is not None:
 ##      define dataset      ##
 ##############################
 
+ds_kws = dict(  timepoint_idx = args.timepoint_idx, 
+                n_dimension = args.n_dimension,
+                cellstate_key=args.cellstate_key,  #'DM_EigenVector'
+                knn_volume = args.knn_volume,
+                log_transform=False,
+                norm_time=args.norm_time,
+                deltax_key=args.deltax_key,
+                kde_kws = {"bw_method":args.bw},
+                batchsize=args.batch_size
+            )
 
-train_DS = reader.TwoTimpepoint_AnnDS(
-                            AnnData=adata, 
-                            timepoint_idx = args.timepoint_idx, 
-                            n_dimension = args.n_dimension,
-                            cellstate_key=args.cellstate_key,  #'DM_EigenVector'
-                            log_transform=False,
-                            norm_time=args.norm_time,
-                            deltax_key=args.deltax_key,
-                            kde_kws = {"bw_method":args.bw},
-                            batchsize=args.batch_size)
-
+train_DS = reader.TwoTimpepoint_AnnDS(AnnData=adata, split='train', **ds_kws)
+val_DS = reader.TwoTimpepoint_AnnDS(AnnData=adata, split='val', **ds_kws)
 train_DL = DataLoader(train_DS, batch_size=None, num_workers=10)
-
+val_DL = DataLoader(val_DS, batch_size=None, num_workers=10)
 ##############################
 ##      set up trainer      ##
 ##############################
@@ -182,8 +186,8 @@ trainer = pl.Trainer(
                     default_root_dir=save_path,
                     devices = [gpu_device], 
                     max_epochs=300,
-                    callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
-                                                monitor="total_loss", mode="min", save_top_k=2)]
+                    callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{val_loss:.8f}',
+                                                monitor="val_loss", mode="min", save_top_k=2)]
                     )
 
 
@@ -202,4 +206,4 @@ config_run.save(os.path.join(save_path, f'V{version}_config.json'))
 
 
 
-trainer.fit(model, train_dataloaders=train_DL)
+trainer.fit(model, train_dataloaders=train_DL,val_dataloaders=val_DL)

@@ -1,0 +1,42 @@
+D_channels:
+- 5
+- 32
+- 1
+D_penalty: 0.1
+activation_fn: Tanh
+batchsize: 128
+channels:
+- 6
+- 16
+- 16
+- 1
+deltax_weight: 1
+g_channels:
+- 5
+- 16
+- 16
+- 1
+growth_weight: 3
+leaveout_timepoints:
+- 3
+- 7
+- 10
+ode_tol: 0.0001
+seen_timepoints:
+- 0
+- 1
+- 2
+- 4
+- 6
+- 8
+test_timepoitns:
+- 5
+- 9
+time_scale_factor: 1
+time_sensitive: false
+v_channels:
+- 5
+- 32
+- 16
+- 5
+weight_intensity: 3
