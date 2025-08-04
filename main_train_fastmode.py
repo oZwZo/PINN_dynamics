@@ -35,7 +35,7 @@ parser.add_argument("--config", type=str, required=False, default=None,
 optional_args = parser.add_argument_group('Optional arguments (ignored when using --config)')
 optional_args.add_argument("-D", "--dataset", type=str, required=False, default="HSPC_clu7", help='the name of the dataset, can be found under folder data')
 optional_args.add_argument("-K", "--cellstate_key", type=str, required=False, default="cellstate", help='the obsm key on which we represent cell and compute density')
-optional_args.add_argument("-M", "--model", type=str, required=False, default="pde_params", help='the model class, defined in models.py')
+optional_args.add_argument("-M", "--model", type=str, required=False, default="pde_params_fastmode", help='the model class, defined in models.py')
 optional_args.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 optional_args.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
 optional_args.add_argument("-L",  "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
@@ -52,6 +52,7 @@ optional_args.add_argument("--channels", type=str, required=False, default="32,3
 optional_args.add_argument("--D_penalty", type=float, required=False, default=None, help='the weight to regulate the level of D (Diffusion)')
 optional_args.add_argument("--deltax_key", type=str, required=False, default="Delta_DM", help='the key to take deltax from adata')
 optional_args.add_argument("--deltax_weight", type=float, required=False, default=1e-2, help='the weight used to regularize the similarity of deltax and v')
+optional_args.add_argument("--R_weight", type=float, required=False, default=None, help='the weight used to regularize the PINN residual loss')
 optional_args.add_argument("--weight_intensity", type=float, required=False, default=None, help='the weight to emphasize the high density cell, > 1 for weighting, <1 for unweighting')
 optional_args.add_argument("--time_scale_factor", type=float, required=False, default=5, help='the scale the time for ode')
 optional_args.add_argument("--norm_time", type=str, required=False, default=False, help='Ways to normlize the timepoint, [False, min_minus, log, none]')
@@ -93,7 +94,6 @@ if args.timepoint_idx is None:
 else:
     args.timepoint_idx = eval(args.timepoint_idx) if isinstance(args.timepoint_idx,str) else args.timepoint_idx
 
-
 if args.log_name:
     log_name = args.log_name
 else:
@@ -111,19 +111,17 @@ model_class = eval(f"models.{args.model}")
 hidden_channels = [int(c) for c in args.channels.split(",")]   
 
 # for g v and D
-if args.model == "pde_params": 
-    n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
-    max_h = max(hidden_channels)
-    model_kws = dict(v_channels = [n_dim] + hidden_channels + [args.n_dimension],
-                    g_channels = [n_dim] + hidden_channels + [1],
-                    D_channels = [n_dim] + hidden_channels + [1],#[args.n_dimension]
-                    )
-    channels = [args.n_dimension + 1 ] + hidden_channels + [1]
-else:
-    model_kws = {}
+
+n_dim = args.n_dimension + 1 if args.time_sensitive else args.n_dimension
+max_h = max(hidden_channels)
+model_kws = dict(v_channels = [n_dim] + hidden_channels + [args.n_dimension],
+                g_channels = [n_dim] + hidden_channels + [1],
+                D_channels = [n_dim] + hidden_channels + [1])
+channels = [args.n_dimension + 1 ] + hidden_channels + [1]
+
 
 model = model_class(
-        lr=args.lr,
+        lr=3e-4,
         channels = channels,
         activation_fn='Tanh',
         ode_tol = args.tol,
@@ -154,21 +152,23 @@ if args.pretrained is not None:
 ##      define dataset      ##
 ##############################
 
-ds_kws = dict(  timepoint_idx = args.timepoint_idx, 
-                n_dimension = args.n_dimension,
-                cellstate_key=args.cellstate_key,  #'DM_EigenVector'
-                knn_volume = args.knn_volume,
-                log_transform=False,
-                norm_time=args.norm_time,
-                deltax_key=args.deltax_key,
-                kde_kws = {"bw_method":args.bw},
-                batchsize=args.batch_size
-            )
+dataset_kws = dict(
+    knn_volume = args.knn_volume,
+    timepoint_idx = args.timepoint_idx, 
+    n_dimension = args.n_dimension,
+    cellstate_key=args.cellstate_key,  #'DM_EigenVector'
+    log_transform=False,
+    norm_time=args.norm_time,
+    deltax_key=args.deltax_key,
+    kde_kws = {"bw_method":args.bw},
+)
 
-train_DS = reader.TwoTimpepoint_AnnDS(AnnData=adata, split='train', **ds_kws)
-val_DS = reader.TwoTimpepoint_AnnDS(AnnData=adata, split='val', **ds_kws)
+train_DS = reader.TwoTimpepoint_AnnDS_fastmode(AnnData=adata, split = 'train', batchsize=args.batch_size, **dataset_kws)
+val_DS = reader.TwoTimpepoint_AnnDS_fastmode(AnnData=adata, split = 'val', batchsize=args.batch_size*5, **dataset_kws)
+
 train_DL = DataLoader(train_DS, batch_size=None, num_workers=10)
 val_DL = DataLoader(val_DS, batch_size=None, num_workers=10)
+
 ##############################
 ##      set up trainer      ##
 ##############################
@@ -186,7 +186,7 @@ trainer = pl.Trainer(
                     default_root_dir=save_path,
                     devices = [gpu_device], 
                     max_epochs=300,
-                    callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{val_loss:.8f}',
+                    callbacks=[callbacks.ModelCheckpoint(filename='{epoch}-{total_loss:.8f}',
                                                 monitor="val_loss", mode="min", save_top_k=2)]
                     )
 
@@ -205,5 +205,4 @@ config_run.experiment_config['checkpoint_dir'] = trainer.logger.log_dir
 config_run.save(os.path.join(save_path, f'V{version}_config.json'))
 
 
-
-trainer.fit(model, train_dataloaders=train_DL,val_dataloaders=val_DL)
+trainer.fit(model, train_dataloaders=train_DL, val_dataloaders=val_DL)

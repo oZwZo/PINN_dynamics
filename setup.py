@@ -58,7 +58,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     
-    install_requires=reqs,
+    install_requires=reqs + ['statsmodels', 'scipy', 'pandas', 'numpy', 'scikit-learn'],
     include_package_data=True,
 
 
