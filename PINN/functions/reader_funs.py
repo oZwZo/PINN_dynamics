@@ -218,7 +218,7 @@ def evaluate_2d_mesh_density(D, t_b, x):
 #    mellon density
 #####
 
-def compute_mellon_u(adata, cellstate_key, timepoint_key, n_dimension):
+def compute_mellon_u(adata, cellstate_key, timepoint_key, n_dimension=None):
     try:
         model_t = mellon.DensityEstimator()
     except:
@@ -243,6 +243,45 @@ def compute_mellon_u(adata, cellstate_key, timepoint_key, n_dimension):
         log_u.append(log_density)
         density_funs.append(model_t)
     return np.stack(log_u), density_funs
+
+def compute_mellon_timesense_u(adata, cellstate_key, timepoint_key, n_dimension=None):
+    
+    
+    try:
+        model_t = mellon.DensityEstimator()
+    except:
+        import mellon
+    
+    adata_tb = adata.obs[timepoint_key]          # pd.Series
+    X = adata.obsm[cellstate_key][:, :n_dimension]        # np.values
+    X_times = adata.obs[timepoint_key]          
+    
+    density_funs = []
+    log_u = []
+
+    ls_time_estimate = 1.5 * np.mean(np.diff(np.sort(X_times.unique())))
+
+    print(ls_time_estimate)
+
+    # Initialize the time-sensitive density estimator with an intrinsic dimensionality of 2
+    t_est = mellon.TimeSensitiveDensityEstimator(d=2, ls_time=ls_time_estimate)
+
+    # Fit the estimator to the data
+    t_est.fit(X, X_times)
+
+    for i, t in enumerate(sorted(adata_tb.unique())):
+        print('estimating density for time ', t)
+        
+        # Save the predictor for later density evaluations
+        density_predictor = t_est.predict
+
+        log_density = model_t.predict(X,t)
+        
+        log_u.append(log_density)
+
+    return np.stack(log_u), density_predictor
+
+
 
 def evaluate_u_ds(cid, cellstate, u_tb, delta_s, den_fn, scaler):
     r"""

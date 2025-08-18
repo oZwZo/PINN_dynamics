@@ -15,7 +15,7 @@ import matplotlib.animation as animation
 
 timepoints = [ 3,   7,  12,  27,  49,  76, 112, 161, 269]
 
-def umap_by_time(attribute, anndata, timepoints=timepoints, time_mask=True,  subplot_kws=None, umap_kws=None):
+def umap_by_time(attribute, anndata, timepoints=timepoints, time_mask=True,  subplot_kws=None, cell_of_t=True, umap_kws=None):
     r"""
     A very basic functions plotting cellular attribute in the umap and stratified by time
 
