@@ -384,7 +384,7 @@ def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints
     else:
         return fig, axs
 
-def assign_nearest_cell(input_ay, adata, cellstate_key, n_dimension, n_trees=10,  n_neighbors=None, annotation=None, return_model=False, idx=None):
+def assign_nearest_cell(input_ay, adata, cellstate_key, n_dimension=None, n_trees=10,  n_neighbors=None, annotation=None, return_model=False, idx=None):
     """
     """
     import annoy
