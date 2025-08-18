@@ -1,5 +1,5 @@
 D_channels:
-- 4
+- 6
 - 16
 - 8
 - 1
@@ -7,7 +7,7 @@ D_penalty: null
 R_weight: null
 activation_fn: Tanh
 channels:
-- 4
+- 6
 - 16
 - 8
 - 1
@@ -15,7 +15,7 @@ collapse_D: true
 collapse_v: false
 deltax_weight: 0.01
 g_channels:
-- 4
+- 6
 - 16
 - 8
 - 1
@@ -26,8 +26,8 @@ pop_weight: null
 time_scale_factor: 5.0
 time_sensitive: true
 v_channels:
-- 4
+- 6
 - 16
 - 8
-- 3
+- 5
 weight_intensity: null

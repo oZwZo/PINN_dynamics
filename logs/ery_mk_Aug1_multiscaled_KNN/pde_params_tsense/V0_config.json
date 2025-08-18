@@ -1,8 +1,8 @@
 {
-    "run_date": "2025-08-03 04:56:27",
+    "run_date": "2025-08-12 18:46:46",
     "experiment_config": {
         "dataset": "ery_mk_Aug1",
-        "gpu_devices": 1,
+        "gpu_devices": 5,
         "progress_bar": "True",
         "save_dir": "/ssd/users/Wergillius/Project/PINN_dynamics/logs/ery_mk_Aug1_multiscaled_KNN/pde_params_tsense",
         "version": 0,
@@ -24,7 +24,7 @@
             6,
             8
         ],
-        "deltax_key": "Delta_DM",
+        "deltax_key": "delta_DM_multiscaled",
         "norm_time": "True",
         "knn_volume": "True"
     },
@@ -71,7 +71,7 @@
         "cellstate_key": "DM_EigenVectors_multiscaled",
         "model": "pde_params",
         "pretrained": null,
-        "gpu_devices": 1,
+        "gpu_devices": 5,
         "log_name": "ery_mk_Aug1_multiscaled_KNN",
         "lr": 0.0003,
         "schedule_lr": "CyclicLR",
@@ -92,7 +92,7 @@
         "tol": 0.0001,
         "channels": "16,8",
         "D_penalty": null,
-        "deltax_key": "Delta_DM",
+        "deltax_key": "delta_DM_multiscaled",
         "deltax_weight": 0.01,
         "weight_intensity": null,
         "time_scale_factor": 5.0,
