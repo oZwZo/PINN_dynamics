@@ -76,45 +76,44 @@ def forward_get_params(pde_model, DataSet, t_ts=None, s_ts=None, timepoint_label
     return u_pred_ls, g_pred_ay, v_pred_ay, D_pred_ay
 
 
-from PINN import pl
 
-def aggregate_params_by_pseudotime(params, adata, param_names='g v2', timepoints=None,  pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
+# def aggregate_params_by_pseudotime(params, adata, param_names='g v2', timepoints=None,  pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
     
 
-    pdt_bins = np.linspace(0,1,nbins+1)
-    pdt_label = (pdt_bins[1:] + pdt_bins[:-1])/2
-    adata.obs['pseudotime_bin'] = pd.cut(adata.obs[pseudotime_key], bins=nbins,
-                                                labels = pdt_label)
+#     pdt_bins = np.linspace(0,1,nbins+1)
+#     pdt_label = (pdt_bins[1:] + pdt_bins[:-1])/2
+#     adata.obs['pseudotime_bin'] = pd.cut(adata.obs[pseudotime_key], bins=nbins,
+#                                                 labels = pdt_label)
 
 
-    timepoints = adata.uns['pop']['t'] if timepoints is None else timepoints 
-    fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
-    axs = axs.flatten() if len(timepoints)>1 else [axs]
+#     timepoints = adata.uns['pop']['t'] if timepoints is None else timepoints 
+#     fig, axs = plt.subplots(1, len(timepoints), figsize=(4*len(timepoints)+1,3), gridspec_kw={"wspace":0.4, 'hspace':0.3})
+#     axs = axs.flatten() if len(timepoints)>1 else [axs]
     
-    y_smooths = []
-    for i,t in enumerate(timepoints):
-        y_col = 'Day%s_'%t + param_names
-        data = adata.obs[['pseudotime_bin']]
-        data[y_col] = params[i]
-        gdata = data.groupby("pseudotime_bin").agg({y_col:"mean"}).reset_index()
+#     y_smooths = []
+#     for i,t in enumerate(timepoints):
+#         y_col = 'Day%s_'%t + param_names
+#         data = adata.obs[['pseudotime_bin']]
+#         data[y_col] = params[i]
+#         gdata = data.groupby("pseudotime_bin").agg({y_col:"mean"}).reset_index()
 
-        x = np.sort(gdata.pseudotime_bin.unique())
-        y = gdata[y_col].values
+#         x = np.sort(gdata.pseudotime_bin.unique())
+#         y = gdata[y_col].values
 
-        model2 = np.poly1d(np.polyfit(x, gdata[y_col], 7))
+#         model2 = np.poly1d(np.polyfit(x, gdata[y_col], 7))
 
-        x_smooth = (x[1:] + x[:-1] )/2
-        y_smooth = (y[1:] + y[:-1] )/2
+#         x_smooth = (x[1:] + x[:-1] )/2
+#         y_smooth = (y[1:] + y[:-1] )/2
 
-        axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
-        axs[i].plot(x, model2(x), color='red', alpha=0.4)
+#         axs[i].scatter(x_smooth, y_smooth, alpha=0.8)
+#         axs[i].plot(x, model2(x), color='red', alpha=0.4)
 
-        y_smooths.append(y_smooth)
+#         y_smooths.append(y_smooth)
 
-    if return_y:
-        return y_smooths
-    else:
-        return fig, axs
+#     if return_y:
+#         return y_smooths
+#     else:
+#         return fig, axs
 
 @torch.no_grad
 def continuous_params(pde_model, DataSet, 
@@ -322,8 +321,8 @@ def param_vs_score(adata, obs_key, param, timepoints=None,timepoint_key='timepoi
     return np.array(spr), np.array(pr)
 
 
-def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints=None, pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
-    """
+def project_params_to_pseudotime(adata, params, param_names='g v2', timepoints=None, pseudotime_key='pseudotime_scaled',nbins=100, return_y=True):
+    r"""
     Project the parameters to the pseudotime and aggregate them by bins
 
     Args
@@ -341,6 +340,17 @@ def aggregate_params_by_pseudotime(adata, params, param_names='g v2', timepoints
     fig, axs : matplotlib figure and axes, the figure with the aggregated parameters    
     
     if return_y : y_smooths
+
+    Example
+    -------
+    >>> nbins =30
+    >>> y =  PINN.tl.project_params_to_pseudotime(adata,
+                                    params = adata.obs["vnorm_v1"].values.reshape(1,-1), 
+                                    param_names = 'v_v1',
+                                    timepoints = adata.uns['pop']['t'][[0]],
+                                    pseudotime_key = 'pseudotime_scaled', 
+                                    nbins = nbins+1, 
+                                    return_y = True)
 
     """
     pdt_max = adata.obs[pseudotime_key].max()

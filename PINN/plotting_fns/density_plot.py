@@ -76,7 +76,7 @@ def umap_by_time(attribute, anndata, timepoints=timepoints, time_mask=True,  sub
 
         sc.pl.umap(anndata, show=False, return_fig=False,  ax=ax, alpha=0.5, s=50,frameon=False);
 
-        ad_t = anndata[cbs] if cell_of_t else anndata
+        ad_t = anndata[cbs] if time_mask else anndata
         sc.pl.umap(ad_t, color=col,  
                 return_fig=False,show=False, ax=ax, frameon=False, 
                 title=title, **umap_kws);

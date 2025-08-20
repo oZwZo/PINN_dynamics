@@ -656,7 +656,7 @@ class pde_params(pde_params_base):
 
 
     def validation_step(self, val_batch, index):
-        loss = self.training_step(val_batch)
+        loss = self.training_step(val_batch, index)
         self.log("val_loss", loss, on_epoch=True, prog_bar=True)
         
     def stratified_ode(self, t, states):

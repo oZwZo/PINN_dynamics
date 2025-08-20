@@ -125,7 +125,7 @@ class ExperimentConfig:
         ckpts = [f for f in os.listdir(log_dir) if f.endswith('.ckpt')]
 
         # extract loss
-        loss = [float(re.match(r"epoch=\d{1,3}-total_loss=([\.,\d]{1,30}).ckpt", ckpt).group(1)) for ckpt in ckpts]
+        loss = [float(re.match(r"epoch=\d{1,3}-\w{1,10}_loss=([\.,\d]{1,30}).ckpt", ckpt).group(1)) for ckpt in ckpts]
         # look for min loss
         ckpt_path = os.path.join(log_dir, ckpts[np.argmin(loss)])
         return ckpt_path
