@@ -67,6 +67,7 @@ adata = sc.read_h5ad(f'data/{dataset_name}.h5ad')
 # %%
 ds_config = config.dataset_config.copy()
 ds_config['timepoint_idx'] = None
+ds_config['knn_volume'] = eval(config.raw_args['knn_volume'])
 
 full_DS = PINN.reader.TwoTimpepoint_AnnDS(adata,split=None,**ds_config)
 cellstate_key = config.dataset_config['cellstate_key']

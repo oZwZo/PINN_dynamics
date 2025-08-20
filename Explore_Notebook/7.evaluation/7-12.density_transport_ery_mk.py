@@ -24,7 +24,7 @@ import seaborn as sns
 from matplotlib.patches import Patch
 
 
-os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
+os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
 sc.settings.set_figure_params(frameon=False, dpi=70, figsize=(3,3))
 
 if __name__ == '__main__':
@@ -75,6 +75,7 @@ HSC_ad = adata[adata.obs['anno_man']=='HSC'].copy()
 # %%
 ds_config = config.dataset_config.copy()
 ds_config['timepoint_idx'] = None
+ds_config['knn_volume'] = eval(config.raw_args['knn_volume'])
 
 full_DS = PINN.reader.TwoTimpepoint_AnnDS(adata,split=None,**ds_config)
 cellstate_key = config.dataset_config['cellstate_key']
@@ -112,7 +113,7 @@ for v in model_dict.keys():
         if args.transport_time is None:
             integrate_time = np.linspace(t/t0, timepoint_tx_days[it+1]/t0 ,n_interval+1) / pde_model.time_scale_factor
         else:
-            transport_time = np.linspace(t/t0, (t+args.transport_time)/t0 ,n_interval+1) / pde_model.time_scale_factor
+            integrate_time = np.linspace(t/t0, (t+args.transport_time)/t0 ,n_interval+1) / pde_model.time_scale_factor
         
         
         try:
