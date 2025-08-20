@@ -38,12 +38,14 @@ optional_args.add_argument("-K", "--cellstate_key", type=str, required=False, de
 optional_args.add_argument("-M", "--model", type=str, required=False, default="pde_params_fastmode", help='the model class, defined in models.py')
 optional_args.add_argument("-W", "--pretrained", type=str, required=False, default=None, help='the path of the pretrained weights')
 optional_args.add_argument("-G", "--gpu_devices", type=int, required=True, default=None, help='select which gpu devices to use')
-optional_args.add_argument("-L",  "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
+optional_args.add_argument("-L", "--log_name", type=str, required=False, default=None, help='the name of the logging directory')
 optional_args.add_argument("--lr", type=float, required=False, default=3e-4, help='the learning rate for training the model')
 optional_args.add_argument("--schedule_lr", type=str, required=False, default="CyclicLR", help='LambdaLR if passing a lambda expression, else StepLR')
 optional_args.add_argument("--n_grid", type=int, required=False, default=300, help='the number of grid or h to devid the cell state space')
 optional_args.add_argument("--n_dimension", type=int, required=False, default=5, help='the number of dimension to used for estimating density')
+optional_args.add_argument("--timepoint_key", type=str, required=False, default='timepoint_tx_days', help='the obs key of the adata that label the timepoint of each cell')
 optional_args.add_argument("--timepoint_idx", type=str, required=False, default=None, help='the number of time point to train the model')
+optional_args.add_argument("--resolution", type=int, required=False, default=None, help='the resolution for tl leiden to generate pseudobulk sample')
 optional_args.add_argument("--knn_volume", type=str, required=False, default=False, help='Whether to correct single-cell density estimate with KNN distance')
 optional_args.add_argument("--batch_size", type=int, required=False, default=200, help='the number of nearby cell state to include within a minibatch')
 optional_args.add_argument("--bw", type=float, required=False, default=None, help='the band width parameter , pass to bw_method for gaussian_kde')
@@ -88,6 +90,10 @@ else:
     main_path = os.path.dirname(path)
 
 adata = sc.read_h5ad(h5_path)
+# sc.pp.subsample(adata, fraction=0.1)
+
+if 'timepoint_tx_days' not in adata.obs_keys():
+    adata.obs['timepoint_tx_days'] = adata.obs[args.timepoint_key].astype(int)
 
 if args.timepoint_idx is None:
     args.timepoint_idx = len(adata.uns['pop']['t'])
@@ -121,7 +127,7 @@ channels = [args.n_dimension + 1 ] + hidden_channels + [1]
 
 
 model = model_class(
-        lr=3e-4,
+        lr=args.lr,
         channels = channels,
         activation_fn='Tanh',
         ode_tol = args.tol,
@@ -153,6 +159,7 @@ if args.pretrained is not None:
 ##############################
 
 dataset_kws = dict(
+    resolution = args.resolution,
     knn_volume = args.knn_volume,
     timepoint_idx = args.timepoint_idx, 
     n_dimension = args.n_dimension,
