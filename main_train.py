@@ -157,7 +157,7 @@ if args.pretrained is not None:
 ds_kws = dict(  timepoint_idx = args.timepoint_idx, 
                 n_dimension = args.n_dimension,
                 cellstate_key=args.cellstate_key,  #'DM_EigenVector'
-                knn_volume = args.knn_volume,
+                knn_volume = eval(args.knn_volume),
                 log_transform=False,
                 norm_time=args.norm_time,
                 deltax_key=args.deltax_key,
