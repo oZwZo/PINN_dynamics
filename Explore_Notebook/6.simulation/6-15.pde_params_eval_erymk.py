@@ -20,7 +20,8 @@ import seaborn as sns
 from matplotlib.patches import Patch
 
 
-os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
+# os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
+os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
 sc.settings.set_figure_params(frameon=False, dpi=70, figsize=(3,3))
 
 if __name__ == '__main__':
@@ -92,7 +93,9 @@ for v in model_dict.keys():
     fig_g.savefig(os.path.join(result_dir,'g.png'), dpi=150, transparent=True)
     
 
-    if D_pred_ay.shape[-1] == 1:
+    if D_pred_ay.shape[-1] > 1:
+        pass
+    else:
         fig_D,axs = PINN.pl.params_in_umap(adata, D_pred_ay.squeeze(), param=r'$D$')
         fig_D.savefig(os.path.join(result_dir,'D.png'), dpi=150, transparent=True)
         
@@ -126,7 +129,7 @@ timepoints = adata.uns['pop']['t']
 n_timepoints = timepoints.shape[0]
 
 for v in model_dict:
-    device = 'cuda:4'
+    device = 'cuda:0'
     pde_model = model_dict[v].to(device).eval()
     u_b = full_DS.u_b.cpu().numpy()
 
@@ -158,3 +161,6 @@ for v in model_dict:
 # concat all df
 density_performance_df = pd.concat(performance_js, axis=0)
 density_performance_df.to_csv(os.path.join(os.path.dirname(result_dir),'density_performance.csv'))
+
+print('eval saved to', os.path.join(os.path.dirname(result_dir),'density_performance.csv'))
+print("Done")
