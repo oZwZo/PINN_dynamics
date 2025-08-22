@@ -105,15 +105,17 @@ for v in model_dict.keys():
     timepoint_key = 'timepoint_tx_days'
     timepoint_tx_days = sorted(adata.obs[timepoint_key].unique())
     t0 = timepoint_tx_days[0]
-
+    scaling_factor = pde_model.time_scale_factor
     HSC_cbs = []
 
-    for it,t in tqdm(enumerate(timepoint_tx_days[:-1])):
+    for it,t in tqdm(enumerate(timepoint_tx_days[ds_config['timepoint_index']][:-1])):
 
-        if args.transport_time is None:
-            integrate_time = np.linspace(t/t0, timepoint_tx_days[it+1]/t0 ,n_interval+1) / pde_model.time_scale_factor
+        if (args.transport_time is not None) and (ds_config['norm_time']==False):
+            integrate_time = np.linspace(t/t0, (t+args.transport_time)/t0 ,n_interval+1) / scaling_factor
+        elif (args.transport_time is not None) and (ds_config['norm_time'] == 'min_minus'):
+            integrate_time = np.linspace(t-t0, t + args.transport_time - t0 ,n_interval+1) / scaling_factor
         else:
-            integrate_time = np.linspace(t/t0, (t+args.transport_time)/t0 ,n_interval+1) / pde_model.time_scale_factor
+            integrate_time = np.linspace(t/t0, timepoint_tx_days[it+1]/t0 ,n_interval+1) / scaling_factor
         
         
         try:
@@ -142,7 +144,7 @@ for v in model_dict.keys():
         np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_sim_trajectory.npy"), S_trajectory)
         np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_TransportMap.npy"), Tmaps_t)
         np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_Norm_TransportMap.npy"), Tmaps_t_norm)
-        np.save(os.path.join(result_dir, f"{start_celltype}_cellbarcode.npy"), start_cell)
+        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_cellbarcode.npy"), start_cell)
     
 
 print("Done")
