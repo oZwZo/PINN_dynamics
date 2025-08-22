@@ -34,7 +34,7 @@ class Density_Transfer(nn.Module):
         
         if noise_schedule is None:
             # the default noise schedule is a constant over time and state
-            self.noise_schedule = lambda t: 1
+            self.noise_schedule = lambda s, t: 1
         else:
             self.noise_schedule = noise_schedule
     
@@ -43,10 +43,16 @@ class Density_Transfer(nn.Module):
 
     def velocity(self, t, s):
         device = s.device
-        t_in = torch.full((s.shape[0],1), t.item()).to(device)
+        ncell  = s.shape[0]
+        t_in = torch.full((s.shape[0],1), t.item()).to(device) *self.model.time_scale_factor
 
-
-        ds = self.model.v(s, t_in*self.model.time_scale_factor)
+        if self.stochastic:
+            noise =  torch.broadcast_to(torch.sqrt(self.model.D(s,t_in)*2).view(ncell,-1), s.shape)
+            ds = self.model.v(s, t_in)  +  \
+                self.noise_schedule(s, t_in) * noise * torch.randn((ncell,1)).to(device)
+        else:
+            # the state is deterministic and only decide by v
+            ds = self.model.v(s, t_in)
 
 
         return ds
@@ -70,12 +76,13 @@ class Density_Transfer(nn.Module):
 
                         )
             except AssertionError:  #underflow
+                step_size = np.around((integrate_time[-1] - integrate_time[0]) / 100 , 2)
                 s_out = odeint(self.velocity, y0=s0, 
                         t=torch.tensor(integrate_time).to(device)*self.model.time_scale_factor,
                         atol=self.model.ode_tol,
                         rtol=self.model.ode_tol,
                         method='rk4',
-                        options = {"step_size":1e-3}
+                        options = {"step_size":step_size}
                         )
             
             s_traj = s_out.detach().cpu().numpy()
