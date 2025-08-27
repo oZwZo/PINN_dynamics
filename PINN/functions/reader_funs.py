@@ -6,7 +6,7 @@ import scanpy as sc
 # import decoupler as dc
 from tqdm import tqdm
 from scipy.stats import gaussian_kde,entropy
-from scipy.integrate import trapz
+# from scipy.integrate import trapz
 from .. import models
 
 
