@@ -243,14 +243,15 @@ class DT_analysis:
         - trajectory_dict: a dictionary of trajectory at its corresponding time point
         """
         # load cell barcode dict
-        self.cb_dict = np.load(os.path.join(self.result_dir, 'HSC_cellbarcode.npy'), allow_pickle=True)
+        
         
 
         # load density intermediate files
         self.TM_dict = {}                        # shape : [cell, step, step]
         self.TM_norm_dict = {}                   # shape : [cell, step, step]
         self.trajectory_dict = {}                # shape : [step+1, cell, n_dim ]
-
+        self.cb_dict = {}
+        ct_prop_ls = []
 
         # load trajectory and transport map
         npy_save_dir = os.path.join(self.result_dir, 'Density_transport')
@@ -258,7 +259,10 @@ class DT_analysis:
 
             day = files.split('_')[1].replace('Day', '')
 
-            if files.endswith('_Norm_TransportMap.npy'):
+            if files.endswith('cellbarcode.npy'):
+                self.cb_dict[day] = np.load(os.path.join(npy_save_dir, files), allow_pickle=True)
+
+            elif files.endswith('_Norm_TransportMap.npy'):
                 self.TM_norm_dict[day] = np.load(os.path.join(npy_save_dir, files))
             
             elif files.endswith('_TransportMap.npy'):
@@ -267,8 +271,16 @@ class DT_analysis:
             elif files.endswith('sim_trajectory.npy'):
                 self.trajectory_dict[day] = np.load(os.path.join(npy_save_dir, files))
             
+            elif files.endswith('ct_prop.csv'):
+                ct_prop = pd.read_csv(os.path.join(npy_save_dir, files))
+                ct_prop_ls.append(ct_prop)
             else:
                 print(f'{files} is not a valid file')
+        
+        if len(ct_prop_ls) >0:
+            print("cell type proportion summary detected")
+            print("adding to  ct_prop property")
+            self.ct_prop = pd.concat(ct_prop_ls)
 
     def summarize_cell_proportions(self, df, celltype_list):
         """
