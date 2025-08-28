@@ -16,6 +16,8 @@ class ExperimentConfig:
             config: Experiment directory path
             model: Initialized model instance
         """
+    
+
         if (args is not None) and (model is not None):
             self.run_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.experiment_config = self._get_experiment_config(args)
@@ -25,6 +27,11 @@ class ExperimentConfig:
             self.raw_args = vars(args)
 
         elif os.path.exists(config) and config.endswith('.json'):
+            try:
+                abs_path = os.path.abspath(config)
+                main_dir = abs_path.split("logs/")[0]
+            except:
+                pass
             self.from_json(config)
 
         elif config is None:
@@ -101,7 +108,7 @@ class ExperimentConfig:
             if v is None:
                 self.__setattr__(k, None)
     
-    def from_json(self, file_path: str) -> 'ExperimentConfig':
+    def from_json(self, file_path: str, main_dir: str = None) -> 'ExperimentConfig':
         """Load a saved experiment configuration from JSON file.
         
         Args:
@@ -115,6 +122,11 @@ class ExperimentConfig:
 
         self.store_attr(data)
         self.raw_args['config'] = file_path
+
+        if main_dir is not None:
+            old_main = self.experiment_config['checkpoint_dir'].split("logs/")[0]
+            self.experiment_config['checkpoint_dir'] = self.experiment_config['checkpoint_dir'].replace(old_main, main_dir)
+            self.experiment_config['save_dir'] = self.experiment_config['save_dir'].replace(old_main, main_dir)
 
     def find_lastest_ckpt(self):
         """
