@@ -1,7 +1,8 @@
 logs/
 logs/*
+results/*
 data/*h5ad
-Pseudodynamic_example/.ipynb_checkpoints/*
+**/.ipynb_checkpoints/*
 simulate_plot/.ipynb_checkpoints/*
 Pseudodynamic_example/__pycache__/functions.cpython-38.pyc
 Pseudodynamic_example/__pycache__/models.cpython-38.pyc
@@ -18,6 +19,7 @@ PINN.egg-info
 PINN.egg-info/*
 nohup.out
 .vscode
+data
 data/combined_filt.h5ad
 data/ery_mk.h5ad
 data/*zip
