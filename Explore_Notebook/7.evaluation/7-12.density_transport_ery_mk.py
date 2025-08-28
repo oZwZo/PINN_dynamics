@@ -3,6 +3,7 @@
 # %load_ext autoreload
 # %autoreload 2
 import os, sys, re
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -24,7 +25,8 @@ import seaborn as sns
 from matplotlib.patches import Patch
 
 
-os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
+# os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
+os.chdir("/Users/weizhongzheng/Documents/python_project/PINN_dynamics")
 sc.settings.set_figure_params(frameon=False, dpi=70, figsize=(3,3))
 
 if __name__ == '__main__':
@@ -41,7 +43,7 @@ if __name__ == '__main__':
 
 # %%
 # find all config files
-config_dir = args.config_dir
+config_dir = os.path.abspath(args.config_dir)
 configs = [file for file in os.listdir(config_dir) if file.endswith('.json')]
 device = torch.device(f"cuda:{args.GPU}" if torch.cuda.is_available() else "cpu")
 # %%
@@ -51,7 +53,10 @@ model_dict = {}
 
 for js in configs:
     version = js.split("_")[0][1:] # after V
-    config_dict[version] = PINN.ExperimentConfig(os.path.join(config_dir, js))
+    config = PINN.ExperimentConfig(os.path.abspath(os.path.join(config_dir, js)))
+    main_dir = "/Users/weizhongzheng/Documents/python_project/PINN_dynamics/"
+    config.from_json(os.path.abspath(os.path.join(config_dir, js)), main_dir)
+    config_dict[version] = config
 
 for v,config in config_dict.items():
     print('version', v)
@@ -74,6 +79,7 @@ HSC_ad = adata[adata.obs['anno_man']=='HSC'].copy()
 
 # %%
 ds_config = config.dataset_config.copy()
+timepoint_idx = ds_config['timepoint_idx'].copy()
 ds_config['timepoint_idx'] = None
 ds_config['knn_volume'] = eval(config.raw_args['knn_volume'])
 
@@ -103,19 +109,27 @@ for v in model_dict.keys():
 
     # timepoint key
     timepoint_key = 'timepoint_tx_days'
-    timepoint_tx_days = sorted(adata.obs[timepoint_key].unique())
+    timepoint_tx_days = np.array(sorted(adata.obs[timepoint_key].unique()))
     t0 = timepoint_tx_days[0]
     scaling_factor = pde_model.time_scale_factor
     HSC_cbs = []
 
-    for it,t in tqdm(enumerate(timepoint_tx_days[ds_config['timepoint_index']][:-1])):
+    selected_time = np.array(timepoint_tx_days)[timepoint_idx][:-1]
+    for it,t in tqdm(enumerate(selected_time)):
 
-        if (args.transport_time is not None) and (ds_config['norm_time']==False):
-            integrate_time = np.linspace(t/t0, (t+args.transport_time)/t0 ,n_interval+1) / scaling_factor
-        elif (args.transport_time is not None) and (ds_config['norm_time'] == 'min_minus'):
-            integrate_time = np.linspace(t-t0, t + args.transport_time - t0 ,n_interval+1) / scaling_factor
+        if  args.transport_time is not None:
+            t2 = t + args.transport_time
         else:
-            integrate_time = np.linspace(t/t0, timepoint_tx_days[it+1]/t0 ,n_interval+1) / scaling_factor
+            t2 = timepoint_tx_days[it+1]
+        
+        if ds_config['norm_time']=='min_minus':
+            t1 = t - t0         # starting timepoint for simulation
+            t2 = t2 - t0        # ending timepoint for simulation
+        else:
+            t1 = t/t0
+            t2 /= t0
+            
+        integrate_time = np.linspace(t1, t2 ,n_interval+1) / pde_model.time_scale_factor
         
         
         try:
@@ -141,10 +155,11 @@ for v in model_dict.keys():
 
 
         print(f"results saved to {result_dir}")
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_sim_trajectory.npy"), S_trajectory)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_TransportMap.npy"), Tmaps_t)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_Norm_TransportMap.npy"), Tmaps_t_norm)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_cellbarcode.npy"), start_cell)
+        endtime = np.round(integrate_time, 2)[-1]
+        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_sim_trajectory.npy"), S_trajectory)
+        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_TransportMap.npy"), Tmaps_t)
+        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_Norm_TransportMap.npy"), Tmaps_t_norm)
+        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_cellbarcode.npy"), start_cell)
     
 
 print("Done")
