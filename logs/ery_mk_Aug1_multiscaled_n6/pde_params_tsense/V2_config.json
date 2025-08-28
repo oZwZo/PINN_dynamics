@@ -1,0 +1,101 @@
+{
+    "run_date": "2025-08-19 21:49:52",
+    "experiment_config": {
+        "dataset": "ery_mk_Aug1",
+        "gpu_devices": 0,
+        "progress_bar": "True",
+        "save_dir": "/rds/user/wz369/hpc-work/PINN_dynamics/logs/ery_mk_Aug1_multiscaled_n6/pde_params_tsense",
+        "version": 2,
+        "checkpoint_dir": "/rds/user/wz369/hpc-work/PINN_dynamics/logs/ery_mk_Aug1_multiscaled_n6/pde_params_tsense/lightning_logs/version_2"
+    },
+    "dataset_config": {
+        "cellstate_key": "DM_EigenVectors_multiscaled",
+        "n_grid": 300,
+        "n_dimension": 3,
+        "kde_kws": {
+            "bw_method": null
+        },
+        "timepoint_idx": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+        ],
+        "deltax_key": "delta_DM_multiscaled",
+        "norm_time": "min_minus",
+        "knn_volume": "False"
+    },
+    "model_config": {
+        "model_class": "pde_params",
+        "channels": null,
+        "activation_fn": null,
+        "ode_tol": 0.0001,
+        "R_weight": 1,
+        "D_penalty": 0,
+        "deltax_weight": 0.1,
+        "weight_intensity": 1,
+        "time_scale_factor": 1.0,
+        "time_sensitive": true,
+        "v_channels": [
+            4,
+            16,
+            32,
+            3
+        ],
+        "g_channels": [
+            4,
+            16,
+            32,
+            1
+        ],
+        "D_channels": [
+            4,
+            16,
+            32,
+            1
+        ]
+    },
+    "training_config": {
+        "batch_size": 200,
+        "schedule_lr": "CyclicLR",
+        "lr": 0.0003,
+        "max_epochs": 300,
+        "optimizer": "Adam"
+    },
+    "raw_args": {
+        "config": "logs/ery_mk_Aug1_multiscaled_n6/V2_weight_intens_0.json",
+        "dataset": "ery_mk_Aug1",
+        "cellstate_key": "DM_EigenVectors_multiscaled",
+        "model": "pde_params",
+        "pretrained": null,
+        "gpu_devices": 0,
+        "log_name": "ery_mk_Aug1_multiscaled_n6",
+        "lr": 0.0003,
+        "schedule_lr": "CyclicLR",
+        "n_grid": 300,
+        "n_dimension": 3,
+        "timepoint_idx": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+        ],
+        "knn_volume": "False",
+        "batch_size": 200,
+        "bw": null,
+        "tol": 0.0001,
+        "channels": "16,32",
+        "D_penalty": 0,
+        "deltax_key": "delta_DM_multiscaled",
+        "deltax_weight": 0.1,
+        "weight_intensity": 1,
+        "time_scale_factor": 1.0,
+        "norm_time": "min_minus",
+        "time_sensitive": true,
+        "progress_bar": "True"
+    }
+}
