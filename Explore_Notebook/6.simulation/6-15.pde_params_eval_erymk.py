@@ -74,7 +74,7 @@ full_DS = PINN.reader.TwoTimpepoint_AnnDS(adata,split=None,**ds_config)
 cellstate_key = config.dataset_config['cellstate_key']
 
 
-# %%
+# # %%
 v_dict = {}
 for v in model_dict.keys():
 
@@ -109,6 +109,9 @@ for v in model_dict.keys():
     cellstate_ad = PINN.tl.make_coord_adata(adata, cellstate_key=cellstate_key, n_dimension=config.dataset_config['n_dimension'], v = v_pred_ay)
     vkeys = [k for k in list(cellstate_ad.layers.keys()) if k.endswith("v")]
 
+    fig_velocity_time,axs = plt.subplots(3,3,figsize=(12,12), dpi=120, gridspec_kw={'wspace':0.35, 'hspace':0.35})
+    axs = axs.flatten()
+    i = 0
     for vkey in vkeys:
         # compute velocity graph
         scv.tl.velocity_graph(cellstate_ad,  vkey=vkey, xkey='cellstate', n_jobs=20)
@@ -120,7 +123,15 @@ for v in model_dict.keys():
                                         legend_loc='right', alpha=0.01,
                                         title=vkey, 
                                         save=f"{result_dir}/{vkey}_velo.png")
-
+        
+        legend = 'right' if i%3 == 2 else 'none'
+        scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
+                                        basis='umap', ax=axs[i], 
+                                        legend_loc=legend, alpha=0.01,
+                                        title=vkey)
+        
+        i += 1
+    fig_velocity_time.savefig(os.path.join(result_dir,'velocity_time.png'), dpi=300, transparent=True)
 
 # ploting simulation
 
@@ -129,7 +140,7 @@ timepoints = adata.uns['pop']['t']
 n_timepoints = timepoints.shape[0]
 
 for v in model_dict:
-    device = 'cuda:0'
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     pde_model = model_dict[v].to(device).eval()
     u_b = full_DS.u_b.cpu().numpy()
 
