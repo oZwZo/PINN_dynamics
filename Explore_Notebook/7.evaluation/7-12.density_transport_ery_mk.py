@@ -161,6 +161,15 @@ for v in model_dict.keys():
         np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_Norm_TransportMap.npy"), Tmaps_t_norm)
         np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_cellbarcode.npy"), start_cell)
     
+    
+    # adata_t_select = [adata.obs.query("`timeponit_tx_days` in @selected_time").index]
+    DT = PINN.models.DT_analysis(adata, result_dir=result_dir)
+    celltype_trajectory = DT.annotate_trajectory('DM_EigenVectors_multiscaled', obs_key='anno_man', copy=False)
 
+    for t, df in celltype_trajectory.items():
+        df.to_csv(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_ct_prop.csv"),index=True)
+    
+    
+    print(f"cell type propotion for version {v} is saved")
 print("Done")
     
