@@ -33,6 +33,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser("script for evaluting ery_mk data fitting")
     parser.add_argument("--config_dir", type=str, required=True, default=None, help='folder of existing config JSON files')
+    parser.add_argument("--save_name", type=str, required=False, default="Density_transport", help='folder of existing config JSON files')
     parser.add_argument("--celltype_key", type=str, required=False, default='anno_man', help='the adata obs key defining cell type')
     parser.add_argument("--start_celltype", type=str, required=False, default='HSC', help='the cell type subset to use as starting point to simualte trajectory')
     parser.add_argument("--transport_time", type=int, required=False, default=None, help='the period of use to do simulation, if none , the next timeepoint will be used')
@@ -101,7 +102,7 @@ for v in model_dict.keys():
 
     config = config_dict[v]
     result_dir = config.result_dir
-    PINN.tl.make_dir(os.path.join(result_dir, "Density_transport"))
+    PINN.tl.make_dir(os.path.join(result_dir, args.save_name))
 
     # initiate Density transfer class
     pde_model = model_dict[v].to(device)
@@ -156,18 +157,18 @@ for v in model_dict.keys():
 
         print(f"results saved to {result_dir}")
         endtime = np.round(integrate_time, 2)[-1]
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_sim_trajectory.npy"), S_trajectory)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_TransportMap.npy"), Tmaps_t)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_Norm_TransportMap.npy"), Tmaps_t_norm)
-        np.save(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}-{endtime}_cellbarcode.npy"), start_cell)
+        np.save(os.path.join(result_dir, args.save_name, f"{start_celltype}_Day{t1}-{t2}_sim_trajectory.npy"), S_trajectory)
+        np.save(os.path.join(result_dir, args.save_name, f"{start_celltype}_Day{t1}-{t2}_TransportMap.npy"), Tmaps_t)
+        np.save(os.path.join(result_dir, args.save_name, f"{start_celltype}_Day{t1}-{t2}_Norm_TransportMap.npy"), Tmaps_t_norm)
+        np.save(os.path.join(result_dir, args.save_name, f"{start_celltype}_Day{t1}-{t2}_cellbarcode.npy"), start_cell)
     
     
     # adata_t_select = [adata.obs.query("`timeponit_tx_days` in @selected_time").index]
-    DT = PINN.models.DT_analysis(adata, result_dir=result_dir)
+    DT = PINN.models.DT_analysis(adata, result_dir=os.path.join(result_dir, args.save_name), celltype=start_celltype)
     celltype_trajectory = DT.annotate_trajectory('DM_EigenVectors_multiscaled', obs_key='anno_man', copy=False)
 
     for t, df in celltype_trajectory.items():
-        df.to_csv(os.path.join(result_dir, "Density_transport", f"{start_celltype}_Day{t}_ct_prop.csv"),index=True)
+        df.to_csv(os.path.join(result_dir, args.save_name, f"{start_celltype}_Day{t}_ct_prop.csv"),index=True)
     
     
     print(f"cell type propotion for version {v} is saved")
