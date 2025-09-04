@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
-import pytorch_lightning as pl
 from typing import Any, Union
 from typing import Any, Union, Callable
 from torchdiffeq import odeint
@@ -11,13 +10,11 @@ from torchdiffeq import odeint_adjoint
 # from TorchDiffEqPack import odesolve_adjoint_sym12
 # from kan import KAN
 import matplotlib.pyplot as plt
-
+import seaborn as sns
 from ._pde_informed_params import *
-from ._PINN_base import PINN_base, PINN_base_sim
-from .MLP_models import MLP_surrogate
-from .Spline_models import MultiDim_CubicSpline, CubicSpline
 from ..functions import eval_funs as efun
-
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from ..plotting_fns import density_plot, param_plot
 
 class Density_Transfer(nn.Module):
     """
@@ -227,9 +224,10 @@ class DT_analysis:
     r"""
     class to analyze the density transport result from saved files
     """
-    def __init__(self, adata, result_dir):
+    def __init__(self, adata, result_dir, celltype=None):
         self.adata = adata
         self.result_dir = result_dir
+        self.celltype = celltype
         self.load_result(result_dir)
 
     def load_result(self, result_dir):
@@ -254,25 +252,30 @@ class DT_analysis:
         ct_prop_ls = []
 
         # load trajectory and transport map
-        npy_save_dir = os.path.join(self.result_dir, 'Density_transport')
-        for files in os.listdir(npy_save_dir):
+
+        for files in os.listdir(self.result_dir):
+
+            if self.celltype is not None:
+                assert type(self.celltype) == str
+                if not files.startswith(self.celltype):
+                    continue
 
             day = files.split('_')[1].replace('Day', '')
 
             if files.endswith('cellbarcode.npy'):
-                self.cb_dict[day] = np.load(os.path.join(npy_save_dir, files), allow_pickle=True)
+                self.cb_dict[day] = np.load(os.path.join(self.result_dir, files), allow_pickle=True)
 
             elif files.endswith('_Norm_TransportMap.npy'):
-                self.TM_norm_dict[day] = np.load(os.path.join(npy_save_dir, files))
+                self.TM_norm_dict[day] = np.load(os.path.join(self.result_dir, files))
             
             elif files.endswith('_TransportMap.npy'):
-                self.TM_dict[day] = np.load(os.path.join(npy_save_dir, files))
+                self.TM_dict[day] = np.load(os.path.join(self.result_dir, files))
 
             elif files.endswith('sim_trajectory.npy'):
-                self.trajectory_dict[day] = np.load(os.path.join(npy_save_dir, files))
+                self.trajectory_dict[day] = np.load(os.path.join(self.result_dir, files))
             
             elif files.endswith('ct_prop.csv'):
-                ct_prop = pd.read_csv(os.path.join(npy_save_dir, files))
+                ct_prop = pd.read_csv(os.path.join(self.result_dir, files))
                 ct_prop_ls.append(ct_prop)
             else:
                 print(f'{files} is not a valid file')
@@ -281,6 +284,9 @@ class DT_analysis:
             print("cell type proportion summary detected")
             print("adding to  ct_prop property")
             self.ct_prop = pd.concat(ct_prop_ls)
+
+        # cb_list = np.concatenate(list(self.cb_dict.values))
+        # self.adata = self.adata[cb_list].copy
 
     def summarize_cell_proportions(self, df, celltype_list):
         """
@@ -310,6 +316,8 @@ class DT_analysis:
         Returns:
         celltype_trajectory: with the annotation added
         """
+        self.celltype_key = obs_key
+        self.cellstate_key = cellstate_key
         try:
             # the order matched with that in adata
             celltype_list = self.adata.obs[obs_key].cat.categories
@@ -322,7 +330,8 @@ class DT_analysis:
         for t, traj in self.trajectory_dict.items():
 
             # cb = self.cb_dict[t]
-            
+            print(t,traj.shape)
+
             ct_df = []
             for step in range(1, traj.shape[0]):
 
@@ -343,3 +352,297 @@ class DT_analysis:
             self.celltype_trajectory = celltype_trajectory 
         else:
             return celltype_trajectory
+            
+    def density_by_celltype_step(self, celltypes, step=-1, norm=True):
+        
+        if norm:
+            DT_dict = self.TM_norm_dict
+        else:
+            DT_dict = self.TM_dict
+
+
+        # step index in the df is 1-indexed but the matrix is 0-indexed
+        step = sorted(self.ct_prop.step.unique())[step]
+        step_index = step - 1
+
+        ct_density_ls = []
+        agg_density_ls = []
+
+        for time in DT_dict:
+            # e.g : '0-4'
+            # density transport matrix at the step
+            DT_M = DT_dict[time][:, step_index]
+            ct_day_df = self.ct_prop.query("`Day` == @time").copy()
+
+            assert DT_M.flatten().shape[0] == ct_day_df.shape[0], 'The number of cell types and the number of rows in the DT matrix should be equal'
+
+            ct_day_df.loc[:,celltypes] = ct_day_df.loc[:,celltypes]* DT_M.flatten().reshape(-1,1)
+            ct_day_df['Day'] = time
+            ct_density_ls.append(ct_day_df)
+
+            agg_density = ct_day_df.groupby('cell_index')[celltypes].agg('sum')
+            agg_density['Day'] = time
+            agg_density.index = self.cb_dict[time]
+            agg_density_ls.append(agg_density)
+
+            
+        self.ct_density = pd.concat(ct_density_ls, axis=0)
+        self.agg_density = pd.concat(agg_density_ls, axis=0)
+
+        self.ct_density['start_day'] = self.ct_density['Day'].apply(lambda x : x.split('-')[0]).astype(int)
+        self.ct_density = self.ct_density.sort_values('start_day', ascending=True)
+        ncell_day = self.ct_density['Day'].value_counts().to_dict()
+
+        return self.agg_density
+    
+    def select_data(self, value, step=None):
+
+        if value == 'assignment_probability':
+            try:
+                df = self.ct_prop.query("`step`==@step")
+            except:
+                raise ValueError("Please run `get_celltype_prop` first")
+            
+        elif value == 'density':
+            try:
+                df = self.ct_density.query("`step`==@step")
+            except:
+                raise ValueError("Please run `density_by_celltype_step` first")
+        
+        elif value == 'agg_density':
+            try:
+                df = self.agg_density
+            except:
+                raise ValueError("Please run `density_by_celltype_step` first")
+        
+        else:
+            raise ValueError("value must be 'assignment_probability' or 'density'")
+
+        return df
+
+    def heatmap_cell_proportions(self, celltypes, value = 'assignment_probability', step=-1, paletter=None,  log_normalize=False, **kwargs):
+        r"""
+        heatmap for  cell proportions with 
+
+        Args:
+        ------
+        celltypes: list of cell types (the columns in self.ct_prop)
+        value : 'assignment_probability', 'density' , 'agg_density'
+        step : which step of the trajectory to plot
+        paletter : color palette for day 
+        cmap : matplotlib colormap
+        **kwargs: kwargs for seaborn clustermap
+
+        Returns:
+        ------
+        g : seaborn cluster grid
+        """
+
+        # sort dataframe
+        step = sorted(self.ct_prop.step.unique())[step]
+
+        # select data source
+        df = self.select_data(value, step)
+        
+        df['start_day'] = df['Day'].apply(lambda x : x.split('-')[0]).astype(int)
+        df = df.sort_values('start_day', ascending=True)
+        ncell_day = df['Day'].value_counts().to_dict()
+
+        # set up color
+        nday = len(df['Day'].unique())
+        if paletter is None:
+            colors = sns.color_palette('Set2',nday)
+            paletter = {day: colors[i] for i, day in enumerate(df['Day'].unique())}
+
+
+        # MAIN Heatmap PLOTING FUNC
+        if log_normalize:
+            show_matrix = self.log_transform(df[celltypes].values)
+        else:
+            show_matrix = df[celltypes].values
+
+        g = sns.clustermap(show_matrix, 
+                    row_colors= df['Day'].map(paletter).to_numpy(), 
+                    row_cluster=False, col_cluster=False,
+                    rasterized=True,
+                    **kwargs
+                    )
+        g.ax_heatmap.set_yticks([])
+        g.ax_heatmap.set_xticklabels(celltypes)
+
+        # Get the axis for row colors
+        ax = g.ax_row_colors
+        g.ax_cbar.set_title(
+            ['','log '][log_normalize] + value
+        )
+
+        # Add labels next to each row color block
+        total_cell = 0
+        for i, label in enumerate(list(paletter.keys())[::-1]):
+            # Calculate text position (x=1.05 places label to the right of the color block)
+
+            ncell = ncell_day[label]
+
+            ax.text(-0.5, (total_cell + ncell//2) / df.shape[0], label,
+                    fontsize=16, ha='right', va='center',
+                    transform=ax.transAxes)
+            
+            total_cell += ncell
+
+        return g
+
+    def log_transform(self, matrix):
+        r"""
+        log normalize and then scale to positive
+        """
+        matrix_raw = matrix.copy()
+        matrix_log = np.log(matrix+1e-1)
+        # transformed_matrix = np.where(matrix_raw == 0, 0, matrix_log-matrix_log.min())
+        transformed_matrix = matrix_log-matrix_log.min()
+        return transformed_matrix
+        
+    def hierarchical_clustering(self, density_matrix=None, value=None, celltypes=None, n_clusters=5, cluster_colors=None, log_normalize=False):
+        r"""
+        This function performs hierarchical clustering on the given density matrix.
+        Two input mode, given: 
+            1. density_matrix or 
+            2. value and celltypes
+        Args
+        -----
+        density_matrix: np.ndarray
+        value : 'assignment_probability', 'density' , 'agg_density'
+        celltypes: list of cell types (the columns in self.ct_prop)
+        n_clusters: int
+        cluster_colors: list
+
+        Returns
+        -------
+        cluster_flat: np.ndarray
+        row_linkage: np.ndarray
+        reordered_indices: np.ndarray
+        """
+        from scipy.spatial.distance import pdist
+        from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+
+        if density_matrix is None:
+            df = self.select_data(value)
+            density_matrix = df[celltypes].values
+        elif (density_matrix is None) & (value is None):
+            raise ValueError("no input given !!! provide density matrix or value_source and celltypes")
+        
+
+        # MAIN Heatmap PLOTING FUNC
+        if log_normalize:
+            show_matrix = self.log_transform(density_matrix)
+        else:
+            show_matrix = density_matrix
+
+        row_distances = pdist(show_matrix, metric='minkowski')
+        row_linkage = linkage(row_distances, method='ward')
+        # Form clusters
+        clusters = fcluster(row_linkage, n_clusters, criterion='maxclust')
+
+        # Create a truncated dendrogram to get reordered indices
+        dnd = dendrogram(row_linkage, truncate_mode="level", p=3, no_plot=True)
+        reordered_indices = dnd['leaves']
+
+        return clusters, row_linkage, reordered_indices
+    
+
+    def clustermap(self,
+                        clusters, 
+                        row_linkage,
+                        celltypes,
+                        density_matrix=None, 
+                        value=None, 
+                        log_normalize=False, 
+                        cluster_colors=None,    
+                        **kwargs
+        ):
+        r"""
+        This function is a wrapper for seaborn.clustermap() that truncates the dendrogram and returns cluster assignments and reordered indices.
+
+        Two input mode, given: 
+            1. density_matrix or 
+            2. value and celltypes
+
+        """
+
+        if density_matrix is None:
+            df = self.select_data(value)
+            density_matrix = df[celltypes].values
+        elif (density_matrix is None) & (value is None):
+            raise ValueError("no input given !!! provide density matrix or value_source and celltypes")
+        
+
+        # MAIN Heatmap PLOTING FUNC
+        if log_normalize:
+            show_matrix = self.log_transform(density_matrix)
+        else:
+            show_matrix = density_matrix
+
+        from matplotlib.patches import Patch
+
+        num_clusters = len(np.unique(clusters))
+
+        if cluster_colors is None:
+            cluster_colors = sns.color_palette("Set3", n_colors=num_clusters)
+        row_colors = [cluster_colors[label - 1] for label in clusters]
+
+
+        g = sns.clustermap(
+                    show_matrix,
+                    row_linkage=row_linkage,
+                    colors_ratio = 0.03,
+                    dendrogram_ratio = 0.2,
+                    row_colors=row_colors,
+                    col_cluster=False,
+                    rasterized=True,
+                    **kwargs
+        )
+        g.ax_heatmap.set_yticks([])
+        g.ax_heatmap.set_xticklabels(celltypes)
+
+        legend_patches = [
+            Patch(color=cluster_colors[i], label=f"Cluster {i + 1}")
+            for i in range(num_clusters)
+            ]
+        g.ax_heatmap.legend(
+            handles = legend_patches,
+            title = False,
+            bbox_to_anchor = (1.05, 0.05, 0.25, 0.25),
+            loc = 'lower left',
+            borderaxespad = 0 ,
+            fontsize=16,
+            frameon=False,
+        )
+
+        g.ax_cbar.set_title(
+            ['', 'log '][log_normalize] + "density"
+        )
+
+        return g
+    
+    def cluster_proportion(self, clusters, cb_list, title=None):
+
+        # cb_list = np.concatenate(list(self.cb_dict.values()))
+        local_ad = self.adata.copy()
+        if 'transport_cluster' in local_ad.obs.columns:
+            local_ad.obs.pop('transport_cluster')
+        named_cluster_flats = ['cluster%s'%c for c in clusters]
+        local_ad.obs.loc[cb_list, 'transport_cluster'] = named_cluster_flats
+
+        sns.set_theme(font_scale=1.3, style='ticks', palette='Set3')
+        # with plt.rc_context({"figure.dpi":100, "figure.figsize":(6,4)}):
+        fig, ax = density_plot.obs_composition(
+                    local_ad[cb_list], 
+                    'timepoint_tx_days', 'transport_cluster', 
+                    figkws={'figsize':[5,4]},
+                    legend_kws={"handles":[], "frameon":False,  "fontsize":13 ,'ncol':3, "bbox_to_anchor":(0.05, 1.4), "loc":'upper left', }
+                    )
+        ax.set_title(title)
+
+        ax.set_xlabel("timepoint")
+        ax.set_ylabel("proportion of clusters")
+
+        return fig, ax

@@ -423,18 +423,25 @@ class pde_params_base(pl.LightningModule):
             t_in = torch.full((batch,1), t.item()*self.time_scale_factor)
             t_in = t_in.to(device).requires_grad_(True)
 
-            u_t = self.get_u(s_t, t_in)
+            u_t = self.get_u(s_t, t_in) # get exp(logu)
             g_t = self.g(s_t, t_in)
             v_t = self.v(s_t, t_in)
 
+            u_next = self.get_u(s_next, t_in) # get exp(logu)
+            v_next = self.v(s_next, t_in)
+
             
             # The drift is sensing the global duds
-            vu = self.mul(u_t, v_t)
+            vu = self.mul(u_t, v_t).view(-1, 1)
+            vu_next = self.mul(u_next, v_next).view(-1, 1)
+
             growth_local = g_t * u_stn1
             # u_stn1 += growth_local
             # global_drift = self.gradient_of(vu.sum(), s_t) 
-            global_drift = torch.autograd.grad(
-                vu.sum(), s_t, create_graph=True, allow_unused=True)[0]
+            # global_drift = torch.autograd.grad(
+            #     vu.sum(), s_t, create_graph=True, allow_unused=True)[0]
+            
+            global_drift = torch.div(torch.broadcast_to(vu_next - vu, s_t.shape), s_next-s_t)#.sum(dim=1)
 
             # the amout of mass flowing with the global drift
             # drift = torch.mul(global_drift.sum(dim=1) , torch.div(u_stn1,u_t))
