@@ -623,7 +623,7 @@ class DT_analysis:
 
         return g
     
-    def cluster_proportion(self, clusters, cb_list, title=None):
+    def cluster_proportion(self, clusters, cb_list, ax=None, title=None):
 
         # cb_list = np.concatenate(list(self.cb_dict.values()))
         local_ad = self.adata.copy()
@@ -637,11 +637,12 @@ class DT_analysis:
         fig, ax = density_plot.obs_composition(
                     local_ad[cb_list], 
                     'timepoint_tx_days', 'transport_cluster', 
-                    figkws={'figsize':[5,4]},
-                    legend_kws={"handles":[], "frameon":False,  "fontsize":13 ,'ncol':3, "bbox_to_anchor":(0.05, 1.4), "loc":'upper left', }
+                    figkws={'figsize':[4,3]},
+                    # legend_kws={"handles":[], "frameon":False,  "fontsize":13 ,'ncol':3, "bbox_to_anchor":(0.05, 1.4), "loc":'upper left', },
+                    ax=ax
                     )
         ax.set_title(title)
-
+       
         ax.set_xlabel("timepoint")
         ax.set_ylabel("proportion of clusters")
 
