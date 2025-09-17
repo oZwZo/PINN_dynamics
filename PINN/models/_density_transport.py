@@ -104,7 +104,7 @@ class Density_Transfer(nn.Module):
         s_traj_ay = self.cellstate_drift(s0, integrate_time)
 
         # step 2. density simulation
-        u_traj_ay = []
+        u0_by_time = []
         for ic in range(0, s0.shape[0], ncell*4):
             s0_chunk = s0[ic:ic+ncell*4]
             u0_chunk = u0[ic:ic+ncell*4]
@@ -120,13 +120,13 @@ class Density_Transfer(nn.Module):
                             rtol=self.model.ode_tol,
                             method='dopri5',
                         )
-            u_traj_ay.append(self.relu(intout[0]).detach().cpu().numpy()) # (time, chunk)
+            u0_by_time.append(self.relu(intout[0]).detach().cpu().numpy()) # (time, chunk)
             del intout
 
-        if len(u_traj_ay)>1:
-            u_traj_ay = np.concatenate(u_traj_ay, axis=1) # (time, cell)
+        if len(u0_by_time)>1:
+            u0_by_time = np.concatenate(u0_by_time, axis=1) # (time, cell)
         else:
-            u_traj_ay = u_traj_ay[0]
+            u0_by_time = u0_by_time[0]
 
         # step 3. density transfer
         Tmaps_t = []
@@ -142,26 +142,26 @@ class Density_Transfer(nn.Module):
 
                 s_traj = torch.from_numpy(s_traj_ay[:,ic:ic+ncell,:]).float().to(device)
                 
-                tn1 = integrate_time[0]
-                diff_flow_u_local = [u_traj_ay[offset, ic:ic+ncell]]
+                tn1 = integrate_time[offset] # t_{n-1}
+                diff_flow_u_local = [u0_by_time[offset, ic:ic+ncell]]
                 leftover_u_local = []
 
                 # step 3.2
                 for i, t in enumerate(integrate_time[1:n_interval-offset+1]):
 
-                    s_tn1 = s_traj[i].requires_grad_().to(device)
-                    s_t = s_traj[i+1].requires_grad_().to(device)
+                    s_source = s_traj[i].requires_grad_().to(device) # s_i
+                    s_target = s_traj[i+1].requires_grad_().to(device) # s_{i+1}
                     
                     left_u = torch.from_numpy(leftover_u_global[-1][i]).requires_grad_().to(device) # left from last round of diff trajactory
                     inflow_u = torch.from_numpy(diff_flow_u_local[-1]).requires_grad_().to(device)  # inflow from last step of the same round of diff trajectory
                     
                     # the 
-                    u_tn1 = left_u.float() + inflow_u.float()
-                    u_t = torch.zeros_like(u_tn1).to(device)
+                    u_source = left_u.float() + inflow_u.float()
+                    u_target = torch.zeros_like(u_source).to(device)
 
                     # integrate the flow within small timespan
                     s_last, u_stay, s_next, u_flow = odeint_adjoint(self, 
-                                    y0= (s_tn1, u_tn1, s_t, u_t), 
+                                    y0= (s_source, u_source, s_target, u_target), 
                                     t = torch.tensor([tn1, t]).float().to(device),
                                     rtol = self.model.ode_tol,
                                     atol = self.model.ode_tol,
@@ -172,7 +172,7 @@ class Density_Transfer(nn.Module):
                         leftover_u_local.append( self.relu(u_stay[-1]).detach().to('cpu').numpy() )
                         tn1 = t
 
-                    del s_tn1, s_t, u_tn1, u_t, left_u, inflow_u, s_last, u_stay, s_next, u_flow
+                    del s_source, s_target, u_source, u_target, left_u, inflow_u, s_last, u_stay, s_next, u_flow
                     # free_memory(to_delete)
                     torch.cuda.empty_cache()
                     self.model.zero_grad()
