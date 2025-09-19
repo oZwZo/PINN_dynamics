@@ -9,9 +9,9 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.10"
-  jobs:
-    post_checkout:
-      - sed -i '' 's|sys.path.insert(0, os.path.abspath.*|sys.path.insert(0, os.path.abspath("../../"))|' docs/source/conf.py
+  # jobs:
+  #   post_checkout:
+  #     - sed -i '' 's|sys.path.insert(0, os.path.abspath.*|sys.path.insert(0, os.path.abspath("../../"))|' docs/source/conf.py
 
 
 # Build documentation in the "docs/" directory with Sphinx
