@@ -7,6 +7,7 @@ simulate_plot/.ipynb_checkpoints/*
 Pseudodynamic_example/__pycache__/functions.cpython-38.pyc
 Pseudodynamic_example/__pycache__/models.cpython-38.pyc
 
+**.DS_Store
 *checkpoints.py
 */*checkpoints.py
 */.ipynb_checkpoints
