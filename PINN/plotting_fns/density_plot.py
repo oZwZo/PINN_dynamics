@@ -292,7 +292,7 @@ def obs_composition(adata, x_var, y_var, kind='bar', figkws={'figsize':[6,4]}, l
         ax=ax,
         stacked=True,
         color=colors,
-        width=0.85,       # Bar width
+        width=0.65,       # Bar width
         edgecolor='white' # Optional: adds separation between bars
         )
 
@@ -301,7 +301,8 @@ def obs_composition(adata, x_var, y_var, kind='bar', figkws={'figsize':[6,4]}, l
     ax.set_ylabel('Proportion (%)')
     # ax.set_title('Cell Type Composition Over Time')
     ax.legend(**legend_kws)
-    plt.tight_layout()
+    # plt.tight_layout()
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
     # plt.show()
 
     return fig, ax

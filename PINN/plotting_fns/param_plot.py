@@ -169,7 +169,7 @@ def truncated_clustermap(matrix,
     # Check if original_shape matches the number of columns
     num_columns = matrix.shape[1]
 
-    if original_shape is None:
+    if original_shape is not None:
         original_rows, original_cols = original_shape
         
     else:
@@ -192,7 +192,7 @@ def truncated_clustermap(matrix,
     
     # Map cluster labels to colors
     if cluster_colors is None:
-        cluster_colors = sns.color_palette("husl", num_clusters)
+        cluster_colors = sns.color_palette("Set3", num_clusters)
 
     row_colors = [cluster_colors[label - 1] for label in clusters]
 
@@ -207,9 +207,9 @@ def truncated_clustermap(matrix,
     cmap_grey = ListedColormap(plt.cm.Greys_r(np.linspace(0.15, 0.8, original_cols+1)))
 
     # Map coordinates to discrete colors
-    x_colors = [ cmap_grey(i) for i in x_coords ]
+    
     y_colors = [ cmap_blue(i) for i in y_coords ]
-    col_colors = [ y_colors, x_colors ]
+    col_colors = y_colors #[ y_colors, x_colors ]
 
     # Prepare matrix for display
     # show_matrix = np.log(matrix + 1e-30) if show_log else matrix
@@ -231,14 +231,16 @@ def truncated_clustermap(matrix,
             cmap=cmap,
             row_colors=row_colors,
             col_colors=col_colors,  # Added column colors
-            dendrogram_ratio=(0.1, 0),
+            dendrogram_ratio=(0.2, 0),
             colors_ratio = (0.03, 0.02),
-            figsize=(8, 8),
+            figsize=(9, 8),
             vmin = show_matrix[show_matrix!=0].min(),
             cbar_kws=cbar_kws,
-            cbar_pos = (0.93, 0.65, 0.04,0.25),
+            cbar_pos = (0.95, 0.75, 0.04,0.2),
+            rasterized=True,
         )
-
+    
+    
     # Customize heatmap appearance
     g.ax_heatmap.set_xticks([])
     g.ax_heatmap.set_yticks([])
@@ -251,12 +253,21 @@ def truncated_clustermap(matrix,
     g.ax_heatmap.legend(
         handles = legend_patches,
         title = False,
-        bbox_to_anchor = (1.05, 0.05, 0.25, 0.25),
+        bbox_to_anchor = (1.02, 0.0, 0.35, 0.45),
         loc = 'lower left',
         borderaxespad = 0 ,
-        fontsize=12,
+        fontsize=14,
         frameon=False,
     )
+    
+    hm_pos = g.ax_heatmap.get_position()
+    col_pos = g.ax_col_colors.get_position()
+    bottom_col_ax = g.fig.add_axes([hm_pos.x0, hm_pos.y0 - col_pos.height - 0.005 , hm_pos.width, col_pos.height  ])
+    # bottom_col_ax.axis("off")
+    x_colors = np.array([ [i] for i in x_coords ]).reshape(1,-1)
+    sns.heatmap(x_colors, cmap=cmap_grey, ax=bottom_col_ax, cbar=False)
+    bottom_col_ax.set_xticks(np.arange(5,105,10))
+    bottom_col_ax.set_xticklabels(col_colorbar_tick_labels_y)
 
     # Add a continuous colorbar for column colors (x-coordinates, blue)
     cax_col_x = g.fig.add_axes([col_colorbar_location_x[0], col_colorbar_location_x[1], col_colorbar_size[0], col_colorbar_size[1]])
@@ -273,21 +284,21 @@ def truncated_clustermap(matrix,
     # cb_col_x.set_label('X Coordinate')
 
     # Add a continuous colorbar for column colors (y-coordinates, grey)
-    if col_colorbar_location_y is None:
-        col_colorbar_location_y = col_colorbar_location_x
-        col_colorbar_location_y[0] += 0.06
-    cax_col_y = g.fig.add_axes([col_colorbar_location_y[0], col_colorbar_location_y[1] , col_colorbar_size[0], col_colorbar_size[1]])
-    cb_col_y = ColorbarBase(
-        cax_col_y,
-        cmap=cmap_grey,
-        boundaries = np.arange(original_cols + 1)/original_cols - 0.05,
-        ticks = np.arange(original_cols),
-        orientation = 'vertical'
-    )
-    if col_colorbar_tick_labels_y is not None:
-        cb_col_y.set_ticks(np.arange(original_cols)/original_cols)
-        cb_col_y.set_ticklabels(col_colorbar_tick_labels_y)
-    # cb_col_y.set_label('Y Coordinate')
+    # if col_colorbar_location_y is None:
+    #     col_colorbar_location_y = col_colorbar_location_x
+    #     col_colorbar_location_y[0] += 0.06
+    # cax_col_y = g.fig.add_axes([col_colorbar_location_y[0], col_colorbar_location_y[1] , col_colorbar_size[0], col_colorbar_size[1]])
+    # cb_col_y = ColorbarBase(
+    #     cax_col_y,
+    #     cmap=cmap_grey,
+    #     boundaries = np.arange(original_cols + 1)/original_cols - 0.05,
+    #     ticks = np.arange(original_cols),
+    #     orientation = 'vertical'
+    # )
+    # if col_colorbar_tick_labels_y is not None:
+    #     cb_col_y.set_ticks(np.arange(original_cols)/original_cols)
+    #     cb_col_y.set_ticklabels(col_colorbar_tick_labels_y)
+    # # cb_col_y.set_label('Y Coordinate')
 
     plt.show()
     
