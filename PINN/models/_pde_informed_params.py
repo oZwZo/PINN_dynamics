@@ -545,7 +545,10 @@ class pde_params(pde_params_base):
             log_u_pred = self.u(s,t)
 
         # boundary u of the current timepoint
-        log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
+        if self.log_transform:
+            log_density_loss_t = self.loss_fn(ut, log_u_pred)    # the input u is in log scale
+        else:
+            log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
 
         return log_density_loss_t
 
@@ -615,8 +618,10 @@ class pde_params(pde_params_base):
         
         # loss 2 : dynamics 
         u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1, ut)
-
-        log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
+        if self.log_transform:
+            log_sim_loss_tp1 = self.loss_fn(utp1+1e-10, u_int[-1]+1e-10) 
+        else:
+            log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
 
 
         # loss 3 : constrain related loss 
