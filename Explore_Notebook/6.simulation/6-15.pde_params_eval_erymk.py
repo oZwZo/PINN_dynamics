@@ -3,6 +3,7 @@
 # %load_ext autoreload
 # %autoreload 2
 import os, sys, re
+# os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -12,6 +13,7 @@ import time
 import PINN
 from PINN import reader, models, pl, tl
 import matplotlib.pyplot as plt
+plt.ion()
 from tqdm.auto import tqdm
 from torchdiffeq import odeint
 
@@ -21,7 +23,8 @@ from matplotlib.patches import Patch
 
 
 # os.chdir("/ssd/users/Wergillius/Project/PINN_dynamics")
-os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
+# os.chdir("/home/wz369/rds/hpc-work/PINN_dynamics")
+os.chdir("/Users/weizhongzheng/Documents/python_project/PINN_dynamics")
 sc.settings.set_figure_params(frameon=False, dpi=70, figsize=(3,3))
 
 if __name__ == '__main__':
@@ -45,7 +48,10 @@ model_dict = {}
 
 for js in configs:
     version = js.split("_")[0][1:] # after V
-    config_dict[version] = PINN.ExperimentConfig(os.path.join(config_dir, js))
+    config = PINN.ExperimentConfig(os.path.abspath(os.path.join(config_dir, js)))
+    main_dir = "/Users/weizhongzheng/Documents/python_project/PINN_dynamics/"
+    config.from_json(os.path.abspath(os.path.join(config_dir, js)), main_dir)
+    config_dict[version] = config
 
 for v,config in config_dict.items():
     print(v)
@@ -75,63 +81,65 @@ cellstate_key = config.dataset_config['cellstate_key']
 
 
 # # %%
-v_dict = {}
-for v in model_dict.keys():
+if __name__ == "__main__":
+    # plt.ioff()
+    v_dict = {}
+    for v in model_dict.keys():
 
-    pde_model = model_dict[v]
-    config = config_dict[v]
+        pde_model = model_dict[v]
+        config = config_dict[v]
 
-    g_pred_ay, v_pred_ay, D_pred_ay = pde_model.predict_param(full_DS)
+        g_pred_ay, v_pred_ay, D_pred_ay = pde_model.predict_param(full_DS)
 
-    result_dir = config_dict[v].result_dir
-    
+        result_dir = config_dict[v].result_dir
+        
 
-    print(f"model version {v}, result saved to :")
-    print(result_dir)
+        print(f"model version {v}, result saved to :")
+        print(result_dir)
 
-    fig_g,axs = PINN.pl.params_in_umap(adata, g_pred_ay, param=r'$g$')
-    fig_g.savefig(os.path.join(result_dir,'g.png'), dpi=150, transparent=True)
-    
+        fig_g,axs = PINN.pl.params_in_umap(adata, g_pred_ay, param=r'$g$')
+        fig_g.savefig(os.path.join(result_dir,'g.png'), dpi=150, transparent=True)
+        
 
-    if D_pred_ay.shape[-1] > 1:
-        pass
-    else:
+        # if D_pred_ay.shape[-1] > 1:
+        #     pass
+        # else:
         fig_D,axs = PINN.pl.params_in_umap(adata, D_pred_ay.squeeze(), param=r'$D$')
         fig_D.savefig(os.path.join(result_dir,'D.png'), dpi=150, transparent=True)
+            
+
+        v_pred_norm = np.sqrt(np.sum(v_pred_ay**2, axis=-1))
+        fig_v,axs = PINN.pl.params_in_umap(adata, v_pred_norm, param=r'$v$')
+        fig_v.savefig(os.path.join(result_dir,'v.png'), dpi=150, transparent=True)
         
 
-    v_pred_norm = np.sqrt(np.sum(v_pred_ay**2, axis=-1))
-    fig_v,axs = PINN.pl.params_in_umap(adata, v_pred_norm, param=r'$v$')
-    fig_v.savefig(os.path.join(result_dir,'v.png'), dpi=150, transparent=True)
-    
+        # visualize like RNA velocity
+        cellstate_ad = PINN.tl.make_coord_adata(adata, cellstate_key=cellstate_key, n_dimension=config.dataset_config['n_dimension'], v = v_pred_ay)
+        vkeys = [k for k in list(cellstate_ad.layers.keys()) if k.endswith("v")]
 
-    # visualize like RNA velocity
-    cellstate_ad = PINN.tl.make_coord_adata(adata, cellstate_key=cellstate_key, n_dimension=config.dataset_config['n_dimension'], v = v_pred_ay)
-    vkeys = [k for k in list(cellstate_ad.layers.keys()) if k.endswith("v")]
-
-    fig_velocity_time,axs = plt.subplots(3,3,figsize=(12,12), dpi=120, gridspec_kw={'wspace':0.35, 'hspace':0.35})
-    axs = axs.flatten()
-    i = 0
-    for vkey in vkeys:
-        # compute velocity graph
-        scv.tl.velocity_graph(cellstate_ad,  vkey=vkey, xkey='cellstate', n_jobs=20)
-        # vis
-        fig_velocity = plt.figure(dpi=120, figsize=(4,4))
-        ax = fig_velocity.gca()
-        scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
-                                        basis='umap', ax=ax, 
-                                        legend_loc='right', alpha=0.01,
-                                        title=vkey, 
-                                        save=f"{result_dir}/{vkey}_velo.png")
-        
-        legend = 'right' if i%3 == 2 else 'none'
-        scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
-                                        basis='umap', ax=axs[i], 
-                                        legend_loc=legend, alpha=0.01,
-                                        title=vkey)
-        
-        i += 1
-    fig_velocity_time.savefig(os.path.join(result_dir,'velocity_time.png'), dpi=300, transparent=True)
+        fig_velocity_time,axs = plt.subplots(3,3,figsize=(12,12), dpi=120, gridspec_kw={'wspace':0.35, 'hspace':0.35})
+        axs = axs.flatten()
+        i = 0
+        for vkey in vkeys:
+            # compute velocity graph
+            scv.tl.velocity_graph(cellstate_ad,  vkey=vkey, xkey='cellstate', n_jobs=1, show_progress_bar=False)
+            # vis
+            fig_velocity = plt.figure(dpi=120, figsize=(4,4))
+            ax = fig_velocity.gca()
+            scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
+                                            basis='umap', ax=ax, 
+                                            legend_loc='right', alpha=0.01,
+                                            title=vkey, 
+                                            save=f"{result_dir}/{vkey}_velo.png")
+            plt.close(fig_velocity)
+            legend = 'right' if i%3 == 2 else 'none'
+            scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
+                                            basis='umap', ax=axs[i], 
+                                            legend_loc=legend, alpha=0.01,
+                                            title=vkey)
+            
+            i += 1
+        fig_velocity_time.savefig(os.path.join(result_dir,'velocity_time.png'), dpi=300, transparent=True)
 
 # ploting simulation
 
@@ -144,16 +152,18 @@ for v in model_dict:
     pde_model = model_dict[v].to(device).eval()
     u_b = full_DS.u_b.cpu().numpy()
 
+    result_dir = config_dict[v].result_dir
+
     u_sim = PINN.tl.density_shortterm_simulation(pde_model, DataSet=full_DS, timepoints=adata.uns['pop']['t'])
     u_int_all = np.concatenate([u_b[0,None], u_sim], axis=0)
 
     fig_ub,axs = PINN.pl.params_in_umap(adata, u_b, param=r'$u_b$')
     fig_ub.savefig(os.path.join(result_dir,'u_b.png'), dpi=150, transparent=True)
 
-    fig_uint,axs = PINN.pl.params_in_umap(adata, u_b, param=r'$u_{sim}$')
+    fig_uint,axs = PINN.pl.params_in_umap(adata, u_int_all, param=r'$u_{sim}$')
     fig_uint.savefig(os.path.join(result_dir,'u_int.png'), dpi=150, transparent=True)
 
-    fig_loguint,axs = PINN.pl.params_in_umap(adata, np.log(u_b+1e-10), param=r'$\log {u_{sim}}$')
+    fig_loguint,axs = PINN.pl.params_in_umap(adata, np.log(u_int_all+1e-10), param=r'$\log {u_{sim}}$')
     fig_loguint.savefig(os.path.join(result_dir,'log_u_sim.png'), dpi=150, transparent=True)
 
     KLD_ls = PINN.tl.KLD_density(u_b, u_int_all)
