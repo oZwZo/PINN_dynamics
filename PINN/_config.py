@@ -124,9 +124,20 @@ class ExperimentConfig:
         self.raw_args['config'] = file_path
 
         if main_dir is not None:
-            old_main = self.experiment_config['checkpoint_dir'].split("logs/")[0]
-            self.experiment_config['checkpoint_dir'] = self.experiment_config['checkpoint_dir'].replace(old_main, main_dir)
-            self.experiment_config['save_dir'] = self.experiment_config['save_dir'].replace(old_main, main_dir)
+            
+            try:
+                for key in ['checkpoint_dir', 'save_dir']:
+                    if key in self.experiment_config and "logs/" in self.experiment_config[key]:
+                        old_main = self.experiment_config[key].split("logs/")[0]
+                        if old_main != "":
+                            self.experiment_config[key] = self.experiment_config[key].replace(old_main, main_dir)
+                        else:
+                            # If the path already starts with logs/, just prepend main_dir
+                            # os.path.join or simple concatenation will work since main_dir ends with /
+                            self.experiment_config[key] = os.path.join(main_dir, self.experiment_config[key])
+            except:
+                pass
+    
 
     def find_lastest_ckpt(self):
         """

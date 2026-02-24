@@ -356,9 +356,10 @@ class PINN_base(pl.LightningModule):
         return L_pop
     
     def get_data(self, data_batch, requires_grad=True):
+        # {'s':s, 't':t, 'tp1':t_p1, 'ut':u_t, 'utp1':u_tp1, 'deltax':deltax}
         s_col, t_col, s_all, t_b, u_b, Mean, Var = data_batch
 
-        s_col = s_col.squeeze().float()
+        s_col = data_batch['s'].squeeze().float()
         t_col = t_col.squeeze().float()
 
         t_b = t_b.squeeze(dim=0).float() if len(t_b.shape) == 4 else t_b  # change dimension
