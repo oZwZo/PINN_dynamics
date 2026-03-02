@@ -73,8 +73,8 @@ def parse_args():
                    help="Random seed (default: 1)")
     p.add_argument("--weight_decay", type=float, default=0.01,
                    help="Adam weight decay (default: 0.01)")
-    p.add_argument("--checkpoint_freq", type=int, default=500,
-                   help="Checkpoint save frequency in iterations (default: 500)")
+    p.add_argument("--top_k", type=int, default=2,
+                   help="Keep top-K best checkpoints by loss (default: 2)")
     return p.parse_args()
 
 
@@ -180,14 +180,19 @@ def main():
     Sigma = []
 
     # ── resume from checkpoint if exists ──
-    ckpt_path = os.path.join(args.save_dir, 'ckpt.pth')
-    start_itr = 1
-    if os.path.exists(ckpt_path):
-        checkpoint = torch.load(ckpt_path, map_location=device)
+    # Prefer ckpt_final.pth (has optimizer state), fall back to ckpt.pth (symlink to best)
+    resume_path = None
+    for candidate in ['ckpt_final.pth', 'ckpt.pth']:
+        p = os.path.join(args.save_dir, candidate)
+        if os.path.exists(p):
+            resume_path = p
+            break
+    if resume_path is not None:
+        checkpoint = torch.load(resume_path, map_location=device)
         func.load_state_dict(checkpoint['func_state_dict'])
         if 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        log.info(f"  Loaded checkpoint from {ckpt_path}")
+        log.info(f"  Loaded checkpoint from {resume_path}")
 
     # ── save args as JSON ──
     args_dict = {
@@ -203,10 +208,41 @@ def main():
         "seed": args.seed,
         "weight_decay": cli_args.weight_decay,
         "in_out_dim": in_out_dim,
-        "checkpoint_freq": cli_args.checkpoint_freq,
+        "top_k": cli_args.top_k,
     }
     with open(os.path.join(args.save_dir, "train_args.json"), "w") as f:
         json.dump(args_dict, f, indent=2)
+
+    # ── top-K best checkpoint tracker ──
+    # Each entry: (loss, iteration, filepath)
+    top_k = cli_args.top_k
+    best_ckpts = []  # sorted ascending by loss (best first)
+
+    def maybe_save_topk(loss_val, itr):
+        """Save checkpoint if loss is among the top-K best seen so far."""
+        nonlocal best_ckpts
+
+        # check if this loss qualifies
+        if len(best_ckpts) >= top_k and loss_val >= best_ckpts[-1][0]:
+            return  # not good enough
+
+        # save new checkpoint
+        ckpt_itr_path = os.path.join(args.save_dir, f'ckpt_best_itr{itr}.pth')
+        torch.save({'func_state_dict': func.state_dict(),
+                     'iteration': itr, 'loss': loss_val}, ckpt_itr_path)
+
+        best_ckpts.append((loss_val, itr, ckpt_itr_path))
+        best_ckpts.sort(key=lambda x: x[0])  # sort by loss ascending
+
+        # evict worst if over capacity
+        if len(best_ckpts) > top_k:
+            _, evict_itr, evict_path = best_ckpts.pop()
+            if os.path.exists(evict_path):
+                os.remove(evict_path)
+            log.info(f"  Top-{top_k} update: saved itr {itr} (loss={loss_val:.6f}), "
+                     f"evicted itr {evict_itr}")
+        else:
+            log.info(f"  Top-{top_k} update: saved itr {itr} (loss={loss_val:.6f})")
 
     # ── training loop ──
     log.info("Starting training...")
@@ -227,7 +263,8 @@ def main():
             optimizer.step()
             lr_adjust.step()
 
-            LOSS.append(loss.item())
+            loss_val = loss.item()
+            LOSS.append(loss_val)
             Trans.append(loss1[-1].mean(0).item())
             Sigma.append(sigma_now)
             L2_1.append(L2_value1.tolist())
@@ -236,15 +273,11 @@ def main():
             itr_time = time.time() - itr_start
             if itr % 10 == 0 or itr == 1:
                 elapsed = time.time() - t_start
-                log.info(f"Iter {itr:5d}/{args.niters}  loss={loss.item():.6f}  "
+                log.info(f"Iter {itr:5d}/{args.niters}  loss={loss_val:.6f}  "
                          f"sigma={sigma_now:.4f}  iter_time={itr_time:.2f}s  "
                          f"elapsed={elapsed:.1f}s")
 
-            if itr % cli_args.checkpoint_freq == 0:
-                ckpt_itr_path = os.path.join(args.save_dir,
-                                              f'ckpt_itr{itr}.pth')
-                torch.save({'func_state_dict': func.state_dict()}, ckpt_itr_path)
-                log.info(f"  Saved checkpoint -> {ckpt_itr_path}")
+            maybe_save_topk(loss_val, itr)
 
     except KeyboardInterrupt:
         log.info("Training interrupted by user.")
@@ -252,7 +285,22 @@ def main():
     total_time = time.time() - t_start
     log.info(f"Training complete. Total time: {total_time:.1f}s")
 
-    # ── save final checkpoint ──
+    # ── log best checkpoints ──
+    log.info(f"Top-{top_k} best checkpoints:")
+    for rank, (bloss, bitr, bpath) in enumerate(best_ckpts, 1):
+        log.info(f"  #{rank}  itr={bitr}  loss={bloss:.6f}  -> {bpath}")
+
+    # ── symlink ckpt.pth -> best checkpoint for easy access ──
+    if best_ckpts:
+        best_path = best_ckpts[0][2]
+        symlink_path = os.path.join(args.save_dir, 'ckpt.pth')
+        if os.path.islink(symlink_path) or os.path.exists(symlink_path):
+            os.remove(symlink_path)
+        os.symlink(os.path.basename(best_path), symlink_path)
+        log.info(f"Symlinked ckpt.pth -> {os.path.basename(best_path)}")
+
+    # ── save final checkpoint (always, with full training history) ──
+    final_path = os.path.join(args.save_dir, 'ckpt_final.pth')
     torch.save({
         'func_state_dict': func.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
@@ -261,8 +309,8 @@ def main():
         'L2_1': L2_1,
         'L2_2': L2_2,
         'Sigma': Sigma,
-    }, ckpt_path)
-    log.info(f"Saved final checkpoint -> {ckpt_path}")
+    }, final_path)
+    log.info(f"Saved final checkpoint -> {final_path}")
 
 
 if __name__ == "__main__":

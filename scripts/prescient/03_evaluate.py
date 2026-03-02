@@ -38,6 +38,7 @@ import numpy as np
 import pandas as pd
 import torch
 import scanpy as sc
+import sklearn
 from sklearn.neighbors import KNeighborsClassifier
 from scipy.stats import pearsonr
 
@@ -73,21 +74,36 @@ def parse_args():
 
 
 # ── Wasserstein-2 helper ──────────────────────────────────────────────────
-def compute_w2(x_sim: torch.Tensor, x_true: torch.Tensor) -> float:
-    """Exact W2 distance via torchcfm (POT backend)."""
-    try:
-        from torchcfm.optimal_transport import wasserstein
-        return float(wasserstein(x_sim.cpu(), x_true.cpu(), power=2, method="exact"))
-    except ImportError:
-        # Fallback: sliced Wasserstein via scipy if torchcfm unavailable
-        log.warning("torchcfm not available; falling back to sliced W2 (approximate)")
-        from scipy.stats import wasserstein_distance
-        x_s = x_sim.cpu().numpy()
-        x_t = x_true.cpu().numpy()
-        # mean over dimensions
-        return float(np.mean([wasserstein_distance(x_s[:, d], x_t[:, d])
-                               for d in range(x_s.shape[1])]))
+# def compute_w2(x_sim: torch.Tensor, x_true: torch.Tensor) -> float:
+#     """Exact W2 distance via torchcfm (POT backend)."""
+#     try:
+#         from torchcfm.optimal_transport import wasserstein
+#         return float(wasserstein(x_sim.cpu(), x_true.cpu(), power=2, method="exact"))
+#     except ImportError:
+#         # Fallback: sliced Wasserstein via scipy if torchcfm unavailable
+#         log.warning("torchcfm not available; falling back to sliced W2 (approximate)")
+#         from scipy.stats import wasserstein_distance
+#         x_s = x_sim.cpu().numpy()
+#         x_t = x_true.cpu().numpy()
+#         # mean over dimensions
+#         return float(np.mean([wasserstein_distance(x_s[:, d], x_t[:, d])
+#                                for d in range(x_s.shape[1])]))
 
+def compute_w2(x_sim, x_true):
+    """Compute exact W2 distance using POT library."""
+    import ot
+    x_s = x_sim.cpu().numpy().astype(np.float64)
+    x_t = x_true.cpu().numpy().astype(np.float64)
+    n_s = x_s.shape[0]
+    n_t = x_t.shape[0]
+    w_a = np.ones(n_s) / n_s
+    w_b = np.ones(n_t) / n_t
+    M = ot.dist(x_s, x_t, metric='sqeuclidean')
+    w2_sq = ot.emd2(w_a, w_b, M)
+    return float(np.sqrt(max(w2_sq, 0.0)))
+def compute_accuracy(F_obs, F_hat):
+    y_true, y_pred = F_obs.idxmax(1).tolist(), F_hat.idxmax(1).tolist()
+    return sklearn.metrics.accuracy_score(y_true, y_pred)
 
 # ── Fate bias helper ──────────────────────────────────────────────────────
 def fate_bias_accuracy(
@@ -153,8 +169,8 @@ def main():
     log.info(f"  Train: {train_mask.sum()}  Test: {test_mask.sum()}")
 
     tp_values = sorted(adata.obs[args.tp_col].unique())
-    tp_first   = tp_values[0]
-    tp_last    = tp_values[-1]
+    tp_first   = tp_values[1]
+    tp_last    = tp_values[2]
     log.info(f"  Timepoints: {tp_values}  →  simulate from t={tp_first} to t={tp_last}")
 
     # ── load PRESCIENT model ──────────────────────────────────────────────
@@ -206,28 +222,28 @@ def main():
     w2_scores = []
     fate_results = []
 
-    with torch.no_grad():
-        for rep in range(args.n_sims):
-            x_i = torch.tensor(x_test_first).to(device)
+    
+    for rep in range(args.n_sims):
+        x_i = torch.tensor(x_test_first).to(device)
 
-            for _ in range(num_steps):
-                z   = torch.randn(x_i.shape[0], x_i.shape[1], device=device) * config.train_sd
-                x_i = net._step(x_i, dt=config.train_dt, z=z)
+        for _ in range(num_steps):
+            z   = torch.randn(x_i.shape[0], x_i.shape[1], device=device) * config.train_sd
+            x_i = net._step(x_i, dt=config.train_dt, z=z)
 
-            w2 = compute_w2(x_i, x_true)
-            w2_scores.append(w2)
+        w2 = compute_w2(x_i.detach(), x_true)
+        w2_scores.append(w2)
 
-            # fate bias on simulated final-timepoint cells
-            fb = fate_bias_accuracy(
-                x_sim       = x_i.cpu().numpy(),
-                x_train     = x_train,
-                y_train     = y_train,
-                x_test_final= x_test_last,
-                y_test_final= y_test_last,
-            )
-            fate_results.append(fb)
+        # fate bias on simulated final-timepoint cells
+        fb = fate_bias_accuracy(
+            x_sim       = x_i.detach().cpu().numpy(),
+            x_train     = x_train,
+            y_train     = y_train,
+            x_test_final= x_test_last,
+            y_test_final= y_test_last,
+        )
+        fate_results.append(fb)
 
-            log.info(f"  rep {rep+1:2d}/{args.n_sims}  W2={w2:.4f}  pearson_r={fb['pearson_r']:.4f}")
+        log.info(f"  rep {rep+1:2d}/{args.n_sims}  W2={w2:.4f}  pearson_r={fb['pearson_r']:.4f}")
 
     w2_mean = np.mean(w2_scores)
     w2_std  = np.std(w2_scores)

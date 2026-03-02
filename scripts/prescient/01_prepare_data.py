@@ -3,22 +3,33 @@ PRESCIENT Data Preparation Script
 ==================================
 Converts an h5ad file into a PRESCIENT-ready data.pt file:
   1. Splits train (Well != 2) / test (Well == 2)
-  2. Exports train expression + metadata CSVs
-  3. Calls PRESCIENT process_data (as Python import, not subprocess)
-  4. Replaces data['xp'] with user-specified obsm embeddings
-  5. Saves test cell embeddings / timepoints / cell types for evaluation
+  2. (Optional) Computes growth weights from scratch via prescient.utils
+  3. Exports train expression + metadata CSVs
+  4. Calls PRESCIENT process_data (as Python import, not subprocess)
+  5. Replaces data['xp'] with user-specified obsm embeddings
+  6. Saves test cell embeddings / timepoints / cell types for evaluation
 
 Usage
 -----
+# With pre-computed growth weights:
 python scripts/prescient/01_prepare_data.py \
     --data_path data/klein_subset.h5ad \
     --growth_path Explore_Notebook/8.Benchmark_v/Msig_GOBP_cellcycle_growth.pt \
     --obsm_key X_pca --n_dims 30 \
     --run_name pca_run
 
+# Compute growth weights from scratch (uses default gene sets):
 python scripts/prescient/01_prepare_data.py \
-    --data_path data/klein_subset.h5ad \
-    --growth_path Explore_Notebook/8.Benchmark_v/Msig_GOBP_cellcycle_growth.pt \
+    --data_path data/klein/klein_addpop.h5ad \
+    --output_dir results/PRESCIENT/ \
+    --obsm_key X_pca --n_dims 30 \
+    --run_name pca_run
+
+# Custom gene sets:
+python scripts/prescient/01_prepare_data.py \
+    --data_path data/klein/klein_addpop.h5ad \
+    --birth_gst data/mouse_geneset/mouse_hallmark_g2m.csv \
+    --death_gst data/mouse_geneset/mouse_hallmark_apoptosis.csv \
     --obsm_key DM_EigenVectors --n_dims 10 \
     --run_name dm_run
 """
@@ -44,6 +55,14 @@ def _patched_torch_load(f, *args, **kwargs):
     return _original_torch_load(f, *args, **kwargs)
 torch.load = _patched_torch_load
 
+# PRESCIENT's process_data uses torch.save with the default pickle protocol (2),
+# which cannot serialize objects larger than 4 GiB.  Force protocol 4+.
+_original_torch_save = torch.save
+def _patched_torch_save(obj, f, *args, **kwargs):
+    kwargs.setdefault("pickle_protocol", 4)
+    return _original_torch_save(obj, f, *args, **kwargs)
+torch.save = _patched_torch_save
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
@@ -55,8 +74,22 @@ def parse_args():
     p.add_argument("--data_path", required=True, help="Path to input .h5ad file")
     p.add_argument(
         "--growth_path",
-        required=True,
-        help="Path to pre-computed growth weights .pt file",
+        default=None,
+        help="Path to pre-computed growth weights .pt file. "
+             "If not provided, growth weights are computed from scratch "
+             "using --birth_gst and --death_gst gene sets.",
+    )
+    p.add_argument(
+        "--birth_gst",
+        default="data/mouse_geneset/mouse_GOBP_cellcycle.csv",
+        help="Path to birth (cell cycle) gene set CSV for growth weight "
+             "computation (default: data/mouse_geneset/mouse_GOBP_cellcycle.csv)",
+    )
+    p.add_argument(
+        "--death_gst",
+        default="data/mouse_geneset/mouse_hallmark_apoptosis.csv",
+        help="Path to death (apoptosis) gene set CSV for growth weight "
+             "computation (default: data/mouse_geneset/mouse_hallmark_apoptosis.csv)",
     )
     p.add_argument(
         "--output_dir",
@@ -104,6 +137,56 @@ def parse_args():
     return p.parse_args()
 
 
+def compute_growth_weights(adata_train, tp_col, birth_gst, death_gst, outfile):
+    """
+    Compute PRESCIENT growth weights from train cells using prescient.utils.
+
+    Follows the pattern in 8-6.PRESCIENT_growth.ipynb:
+      1. StandardScaler on expression matrix → xs
+      2. PCA coordinates → xp
+      3. prescient.utils.get_growth_weights(xs, xp, metadata, ...)
+    """
+    import sklearn.preprocessing
+    import scipy.sparse
+    import prescient.utils
+
+    log.info("Computing growth weights from scratch ...")
+    log.info(f"  birth_gst = {birth_gst}")
+    log.info(f"  death_gst = {death_gst}")
+
+    # Scaled expression (StandardScaler)
+    X = adata_train.X
+    if scipy.sparse.issparse(X):
+        X = X.toarray()
+    scaler = sklearn.preprocessing.StandardScaler()
+    xs = pd.DataFrame(
+        scaler.fit_transform(X),
+        index=adata_train.obs_names,
+        columns=adata_train.var_names,
+    )
+
+    # PCA coordinates (full, not truncated — used internally by growth computation)
+    xp = adata_train.obsm["X_pca"].copy()
+
+    # Metadata
+    metadata = adata_train.obs.copy()
+
+    growth_weights, growth_log = prescient.utils.get_growth_weights(
+        xs,
+        xp,
+        metadata,
+        tp_col=tp_col,
+        genes=adata_train.var_names,
+        birth_gst=birth_gst,
+        death_gst=death_gst,
+        outfile=outfile,
+    )
+
+    log.info(f"  Growth weights shape: {growth_weights.shape}")
+    log.info(f"  Saved to: {outfile}")
+    return outfile
+
+
 def run_prescient_process_data(expr_csv, meta_csv, growth_path, out_dir, tp_col, celltype_col, num_pcs):
     """
     Call PRESCIENT's process_data as a Python function (not subprocess).
@@ -111,6 +194,11 @@ def run_prescient_process_data(expr_csv, meta_csv, growth_path, out_dir, tp_col,
     """
     from argparse import Namespace
     from prescient.commands.process_data import main as prescient_process_data
+
+    # PRESCIENT uses string concatenation (out_dir + "data.pt") not os.path.join,
+    # so out_dir MUST end with a path separator.
+    if not out_dir.endswith(os.sep):
+        out_dir = out_dir + os.sep
 
     prescient_args = Namespace(
         data_path=expr_csv,
@@ -157,6 +245,20 @@ def main():
         f"  Train cells: {train_mask.sum()}  Test cells: {test_mask.sum()}"
     )
 
+    # ------------------------------------------------------------------ growth weights
+    growth_path = args.growth_path
+    if growth_path is None:
+        growth_path = os.path.join(out_dir, "growth_weights.pt")
+        compute_growth_weights(
+            adata_train=adata_train,
+            tp_col=args.tp_col,
+            birth_gst=args.birth_gst,
+            death_gst=args.death_gst,
+            outfile=growth_path,
+        )
+    else:
+        log.info(f"Using pre-computed growth weights: {growth_path}")
+
     # ------------------------------------------------------------------ export CSVs
     expr_csv = os.path.join(out_dir, "train_expr.csv")
     meta_csv = os.path.join(out_dir, "train_meta.csv")
@@ -178,7 +280,7 @@ def main():
     run_prescient_process_data(
         expr_csv=expr_csv,
         meta_csv=meta_csv,
-        growth_path=args.growth_path,
+        growth_path=growth_path,
         out_dir=out_dir,
         tp_col=args.tp_col,
         celltype_col=args.celltype_col,
@@ -229,6 +331,22 @@ def main():
         log.info(f"    tp={tp}: {emb.shape}")
 
     data["xp"] = new_xp
+
+    # ------------------------------------------------------------------ remap y/tps to 0-based indices
+    # PRESCIENT's training code uses y values as list indices (e.g. x[config.train_t[-1]]),
+    # so y must be [0, 1, 2, ...], NOT the actual timepoint values [2, 4, 6].
+    y_orig = data["y"]  # e.g. [2, 4, 6]
+    y_map = {v: i for i, v in enumerate(y_orig)}
+    data["y"] = list(range(len(y_orig)))
+    log.info(f"  Remapped y: {y_orig} → {data['y']}")
+
+    tps_orig = data["tps"]
+    tps_new = np.empty_like(tps_orig)
+    for orig_val, new_idx in y_map.items():
+        tps_new[tps_orig == orig_val] = new_idx
+    data["tps"] = tps_new
+    log.info(f"  Remapped tps: unique {np.unique(tps_orig)} → {np.unique(tps_new)}")
+
     torch.save(data, data_pt_path)
     log.info(f"Saved modified data.pt → {data_pt_path}")
     log.info(f"  xp shapes: {[x.shape for x in data['xp']]}")

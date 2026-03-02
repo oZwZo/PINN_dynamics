@@ -607,3 +607,37 @@ def mmd_laplace(X, Y, gamma=None):
     
     mmd_squared = term_XX + term_YY - 2 * term_XY
     return np.sqrt(max(mmd_squared, 0.0))  # Ensure non-negative
+
+import sklearn
+
+def _read_process_F_hat(path, pickle=False, filter_nan=True):
+
+    if pickle:
+        F_hat = pd.read_pickle(path)[0]
+    else:
+        F_hat = pd.read_csv(path, index_col=0)
+    F_hat_filt = F_hat.copy().drop("Undifferentiated", axis=1)
+    F_hat_filt_norm = F_hat_filt.div(F_hat_filt.sum(1), axis=0).fillna(0)
+    if filter_nan:
+        F_hat_filt_norm = replace_undiff(F_hat_filt_norm)
+    F_hat_filt_norm.index = F_obs.index  # F_hat_filt_norm.index.astype(str)
+    return F_hat_filt_norm
+
+
+def replace_undiff(F_hat_filt_norm):
+
+    # create a temp vector to add undiff label
+    undiff = np.zeros(len(F_hat_filt_norm))
+    replace_idx = np.where(F_hat_filt_norm.sum(1) == 0)
+    #     print(f"{replace_idx[0].shape[0]} non-fates")
+    undiff[replace_idx] = 1
+
+    # add to normalized matrix
+    F_hat_filt_norm["Undifferentiated"] = undiff
+
+    return F_hat_filt_norm
+
+
+def compute_accuracy(F_obs, F_hat):
+    y_true, y_pred = F_obs.idxmax(1).tolist(), F_hat.idxmax(1).tolist()
+    return sklearn.metrics.accuracy_score(y_true, y_pred)
