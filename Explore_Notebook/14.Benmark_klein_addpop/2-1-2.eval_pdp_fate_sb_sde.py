@@ -12,13 +12,14 @@ import fate_eval_pipeline as fate_eval
 
 
 p = argparse.ArgumentParser(
-    description="Per-cell fate accuracy evaluation for a trained pseudodynamics+ model"
+    description="Per-cell fate accuracy evaluation for a trained pseudodynamics+ using a score-guided SDE (Schrödinger Bridge) simulation_func"
 )
 p.add_argument("--config_path", required=True,help="pdp training config : xx.json")
 p.add_argument("--celltype_col", default="Annotation")
 p.add_argument("--output_path", default=None)
-p.add_argument("--t_end_norm", default=4.0, type=float, 
-               help='the normalized integration end time')
+p.add_argument("--t_end_norm", default=0.2, type=float,  help='the normalized integration end time')
+p.add_argument("--n_steps", default=200, type=int,  help=' Euler-Maruyama discretisation steps')
+p.add_argument("--noise_scale", default=1.0, type=float,  help='Global multiplier on the stochastic term.  Set to 0 for the deterministic limit; sweep [0.1, 0.5, 1.0, 2.0] to tune.')
 p.add_argument("--n_sims",       type=int, default=100,
                 help="Simulated trajectories per start cell (default 100)")
 p.add_argument("--k",            type=int, default=15,
@@ -48,7 +49,11 @@ fobs_idx_str  = F_obs.index.astype(str)
 valid_mask  = adata.obs_names.astype(str).isin(fobs_idx_str)
 start_cells = adata[valid_mask].obsm[cellstate_key][:,:n_dims]
 
-sim_fn = fate_eval.make_pseudodynamics_sim_fn(t_start_norm=0.0, t_end_norm=args.t_end_norm)
+sim_fn = fate_eval.make_pseudodynamics_sb_sim_fn(t_start_norm=0.0, 
+                                                  t_end_norm=args.t_end_norm,
+                                                  n_steps = args.n_steps,
+                                                  noise_scale = args.noise_scale
+                                                  )
 
 
 
@@ -102,12 +107,12 @@ fate_tbl = pd.DataFrame({
     "F_obs_mean": F_obs_al.mean(),
     "F_hat_mean": F_hat.mean(),
 })
-fate_csv = output_path.replace(".csv", "_celltype_fractions.csv")
+fate_csv = output_path.replace(".csv", f"t{args.t_end_norm}_n{args.noise_scale}_sb_celltype_fractions.csv")
 fate_tbl.to_csv(fate_csv)
 print(f"Cell-type fractions → {fate_csv}")
 print(f"\n{fate_tbl.to_string()}")
 
 # Per-cell F_hat
-fhat_csv = output_path.replace(".csv", "_F_hat.csv")
+fhat_csv = output_path.replace(".csv", f"t{args.t_end_norm}_n{args.noise_scale}_sb_F_hat.csv")
 F_hat.to_csv(fhat_csv)
 print(f"F_hat per cell → {fhat_csv}")
