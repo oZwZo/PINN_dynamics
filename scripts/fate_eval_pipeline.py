@@ -531,7 +531,7 @@ def make_pseudodynamics_sde_sim_fn(
                     2.0 * torch.abs(D)
                 )                                           # (N, 1 or n_dims)
                 # Broadcast D to match s shape if collapsed
-                s = s + v * dt + noise_scale * diffusion_coeff * dW
+                s = s + v * dt + noise_scale * diffusion_coeff.unsqueeze(dim=1) * dW
 
         endpoints = s.cpu().numpy().reshape(n_cells, n_sims, n_dims)
         return endpoints
