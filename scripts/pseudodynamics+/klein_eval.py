@@ -274,7 +274,7 @@ def eval_w2_v1(config, pde_model, adata, device, n_seed=5000, reg=0.05):
 
 def eval_w2_v2(config, pde_model, adata, device, reg=0.05):
     """
-    V2: start from test-tp4 cells → simulate to tp6 → compare with test-tp6.
+    V2: start from test-tp4 cells → simul compareate to tp6 → with test-tp6.
     Tests: does the velocity field correctly advance the test distribution one step?
     """
     raw           = config.raw_args

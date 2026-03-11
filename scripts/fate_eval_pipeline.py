@@ -58,6 +58,23 @@ Provided simulation_func factories
   make_trajectorynet_sim_fn(int_tp_start, int_tp_end)
       model = cnf_model               CNF (TrajectoryNet)
 
+  make_otcfm_sim_fn(t_start, t_end)
+      model = mlp_model               ODE via torchdyn (OT-CFM)
+
+  make_sf2m_ode_sim_fn(t_start, t_end)
+      model = drift_model             ODE via torchdyn (SF2M drift only)
+
+  make_sf2m_sde_sim_fn(t_start, t_end, sigma, n_steps)
+      model = (drift_model, score_model)   SDE via torchsde (SF2M)
+
+Method-agnostic W2 helpers
+---------------------------
+  compute_w2(x_sim, x_true)
+      Exact W2 distance via POT (ot.emd2)
+
+  eval_w2_tasks(eval_tasks, simulate_fn, n_sims, n_sim_cells)
+      Batch W2 evaluation over task list
+
 Quick example
 -------------
   from scripts.fate_eval_pipeline import run_fate_evaluation, make_prescient_sim_fn
@@ -85,12 +102,15 @@ Quick example
 """
 
 import logging
+import torch
 import numpy as np
+import scanpy as sc
+import pseudodynamics as pdp
 import pandas as pd
 import sklearn.metrics
 from scipy.stats import pearsonr
 from sklearn.neighbors import KNeighborsClassifier
-
+from torchcfm.optimal_transport import wasserstein
 log = logging.getLogger(__name__)
 
 
@@ -662,3 +682,307 @@ def make_trajectorynet_sim_fn(int_tp_start: float, int_tp_end: float):
         return z_out.detach().cpu().numpy()   # (n_cells, n_dims)
 
     return _simulate
+
+
+def make_otcfm_sim_fn(t_start: float = 0.0, t_end: float = 2.0,
+                      solver: str = "dopri5", n_steps: int = 100):
+    """
+    Return a simulation_func for OT-CFM.
+
+    Usage
+    -----
+        model = mlp_model      # torchcfm MLP (time-varying)
+        sim_fn = make_otcfm_sim_fn(t_start=0.0, t_end=2.0)
+
+        endpoints = sim_fn(start_cells, model, n_sims=1, device="cuda:0")
+        # returns ndarray (n_cells, n_dims)  — deterministic ODE
+
+    Notes
+    -----
+    OT-CFM is a deterministic ODE; n_sims is ignored.
+    Uses torchdyn NeuralODE with torch_wrapper for compatibility.
+    """
+    import torch
+    from torchdyn.core import NeuralODE
+    from torchcfm.utils import torch_wrapper
+
+    def _simulate(start_cells, model, n_sims, device):
+        node = NeuralODE(torch_wrapper(model), solver=solver)
+        x0 = torch.tensor(start_cells, dtype=torch.float32).to(device)
+        with torch.no_grad():
+            traj = node.trajectory(
+                x0,
+                t_span=torch.linspace(t_start, t_end, n_steps, device=device),
+            )
+        return traj[-1].cpu().numpy()   # (n_cells, n_dims)
+
+    return _simulate
+
+
+def make_sf2m_ode_sim_fn(t_start: float = 0.0, t_end: float = 2.0,
+                         solver: str = "euler", n_steps: int = 100):
+    """
+    Return a deterministic simulation_func for SF2M (drift model only).
+
+    Usage
+    -----
+        model = drift_model    # torchcfm MLP (time-varying)
+        sim_fn = make_sf2m_ode_sim_fn(t_start=0.0, t_end=2.0)
+
+        endpoints = sim_fn(start_cells, model, n_sims=1, device="cuda:0")
+        # returns ndarray (n_cells, n_dims)  — deterministic ODE
+
+    Notes
+    -----
+    Uses only the drift model (no score). Deterministic; n_sims ignored.
+    Default solver is "euler" following the torchcfm SF2M convention.
+    """
+    import torch
+    from torchdyn.core import NeuralODE
+    from torchcfm.utils import torch_wrapper
+
+    def _simulate(start_cells, model, n_sims, device):
+        node = NeuralODE(torch_wrapper(model), solver=solver)
+        x0 = torch.tensor(start_cells, dtype=torch.float32).to(device)
+        with torch.no_grad():
+            traj = node.trajectory(
+                x0,
+                t_span=torch.linspace(t_start, t_end, n_steps, device=device),
+            )
+        return traj[-1].cpu().numpy()   # (n_cells, n_dims)
+
+    return _simulate
+
+
+def make_sf2m_sde_sim_fn(t_start: float = 0.0, t_end: float = 2.0,
+                         sigma: float = 0.05, n_steps: int = 400):
+    """
+    Return a stochastic simulation_func for SF2M (drift + score via torchsde).
+
+    Usage
+    -----
+        model = (drift_model, score_model)   # both torchcfm MLP
+        sim_fn = make_sf2m_sde_sim_fn(t_start=0.0, t_end=2.0, sigma=0.05)
+
+        endpoints = sim_fn(start_cells, model, n_sims=100, device="cuda:0")
+        # returns ndarray (n_cells, n_sims, n_dims)
+
+    Notes
+    -----
+    Stochastic SDE integration using torchsde.sdeint.
+    Each start cell is replicated n_sims times for independent trajectories.
+    """
+    import torch
+    import torchsde
+
+    class _SDE(torch.nn.Module):
+        noise_type = "diagonal"
+        sde_type = "ito"
+
+        def __init__(self, drift, score, input_size, sig):
+            super().__init__()
+            self.drift = drift
+            self.score = score
+            self.input_size = input_size
+            self.sigma = sig
+
+        def f(self, t, y):
+            y = y.view(-1, *self.input_size)
+            if len(t.shape) == len(y.shape):
+                x = torch.cat([y, t], 1)
+            else:
+                x = torch.cat([y, t.repeat(y.shape[0])[:, None]], 1)
+            return self.drift(x).flatten(start_dim=1) + self.score(x).flatten(start_dim=1)
+
+        def g(self, t, y):
+            return torch.ones_like(y) * self.sigma
+
+    def _simulate(start_cells, model, n_sims, device):
+        drift_model, score_model = model
+        n_cells, n_dims = start_cells.shape
+
+        sde = _SDE(drift_model, score_model, input_size=(n_dims,), sig=sigma)
+
+        # Expand each cell n_sims times → (n_cells * n_sims, n_dims)
+        x0 = torch.from_numpy(
+            np.repeat(start_cells.astype(np.float32), n_sims, axis=0)
+        ).to(device)
+
+        with torch.no_grad():
+            traj = torchsde.sdeint(
+                sde, x0,
+                ts=torch.linspace(t_start, t_end, n_steps, device=device),
+            )
+
+        endpoints = traj[-1].cpu().numpy().reshape(n_cells, n_sims, n_dims)
+        return endpoints
+
+    return _simulate
+
+
+# ─── Method-agnostic W2 helpers ─────────────────────────────────────────────
+
+def compute_w2(x_sim, x_true):
+    """
+    Compute exact W2 distance using POT library.
+
+    Parameters
+    ----------
+    x_sim  : ndarray (n_sim, n_dims)
+    x_true : ndarray (n_true, n_dims)
+
+    Returns
+    -------
+    float : W2 distance
+    """
+    import ot
+    x_s = np.asarray(x_sim, dtype=np.float64)
+    x_t = np.asarray(x_true, dtype=np.float64)
+    n_s, n_t = x_s.shape[0], x_t.shape[0]
+    w_a = np.ones(n_s) / n_s
+    w_b = np.ones(n_t) / n_t
+    M = ot.dist(x_s, x_t, metric='sqeuclidean')
+    w2_sq = ot.emd2(w_a, w_b, M)
+    return float(np.sqrt(max(w2_sq, 0.0)))
+
+
+def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
+    """
+    Evaluate W2 distance over a list of tasks.
+
+    Parameters
+    ----------
+    eval_tasks : list of dict
+        Each dict has keys: name, t_start, t_end, src_emb, target_emb.
+    simulate_fn : callable(x_start, t_start, t_end) -> ndarray (n_cells, n_dims)
+        Deterministic forward simulation.
+    n_sims : int
+        Number of replicates (with random subsampling).
+    n_sim_cells : int
+        Max cells per replicate for W2 computation.
+
+    Returns
+    -------
+    list of dict : [{task, replicate, w2}, ...]
+    """
+    results = []
+    for task in eval_tasks:
+        for rep in range(n_sims):
+            src = task['src_emb']
+            if src.shape[0] > n_sim_cells:
+                idx = np.random.choice(src.shape[0], n_sim_cells, replace=False)
+                src = src[idx]
+
+            z_sim = simulate_fn(src, task['t_start'], task['t_end'])
+
+            tgt = task['target_emb']
+            if tgt.shape[0] > n_sim_cells:
+                tgt = tgt[np.random.choice(tgt.shape[0], n_sim_cells, replace=False)]
+            if z_sim.shape[0] > n_sim_cells:
+                z_sim = z_sim[np.random.choice(z_sim.shape[0], n_sim_cells, replace=False)]
+
+            w2 = compute_w2(z_sim, tgt)
+            results.append({"task": task['name'], "replicate": rep + 1, "w2": w2})
+    return results
+
+
+def klein_w2_v1(test_ad:sc.AnnData,
+              clone_proportions:pd.DataFrame, 
+              config:pdp.ExperimentConfig, 
+              device:torch.device, 
+              sim_fn:callable, 
+              n_sims=10, 
+              reg=0.05):
+    R"""
+    Compute W2 loss from t4 cells to t6 cells for testset specific clones
+    """
+
+    # get some data key
+    n_dims = config.dataset_config['n_dimension']
+    cellstate_key = config.dataset_config.get("cellstate_key", None)
+    timepoint_key = config.dataset_config.get("timepoint_key", "timepoint_tx_days")
+
+
+    # get start cell
+    w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
+    w2_test_ad = test_ad[w2_clone_mask].copy()
+    start_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
+    start_cells = start_ad.obsm[cellstate_key][:,:n_dims]
+
+    # ref : ground truth
+    ref_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
+    ref_cells = ref_ad.obsm[cellstate_key][:,:n_dims]
+
+    # load model
+    pde_model = pdp.models.pde_params.load_from_checkpoint(
+    config.find_lastest_ckpt()).to(device)
+
+    endpoints = np.asarray(sim_fn(start_cells, pde_model, n_sims, device))
+    endpoints = endpoints.reshape(-1, start_cells.shape[1])
+
+    with torch.no_grad():
+        w2 = wasserstein(
+            torch.from_numpy(endpoints).to(device),
+            torch.from_numpy(ref_cells).to(device),
+            reg=reg
+            )
+    return w2
+
+
+def klein_w2_v2(test_ad: sc.AnnData,
+                clone_proportions: pd.DataFrame,
+                config: pdp.ExperimentConfig,
+                device: torch.device,
+                sim_fn: callable,
+                n_sims=10,
+                reg=0.05):
+    R"""
+    Compute per-clone W2 distance from t4 cells to t6 cells for testset clones.
+
+    Returns
+    -------
+    pd.DataFrame with columns: clone, w2, clone_size_t4, clone_size_t6
+    """
+    n_dims = config.dataset_config['n_dimension']
+    cellstate_key = config.dataset_config.get("cellstate_key", None)
+
+    # filter to clones present in clone_proportions
+    w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
+    w2_test_ad = test_ad[w2_clone_mask].copy()
+
+    # load model
+    pde_model = pdp.models.pde_params.load_from_checkpoint(
+        config.find_lastest_ckpt()).to(device)
+
+    start_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
+    ref_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
+
+    clones = start_ad.obs.clones.unique()
+    records = []
+    for clone_id in clones:
+        # start cells for this clone
+        cmask_start = start_ad.obs.clones == clone_id
+        cmask_ref = ref_ad.obs.clones == clone_id
+        if cmask_start.sum() == 0 or cmask_ref.sum() == 0:
+            continue
+
+        sc_cells = start_ad[cmask_start].obsm[cellstate_key][:, :n_dims]
+        rc_cells = ref_ad[cmask_ref].obsm[cellstate_key][:, :n_dims]
+
+        endpoints = np.asarray(sim_fn(sc_cells, pde_model, n_sims, device))
+        endpoints = endpoints.reshape(-1, sc_cells.shape[1])
+
+        with torch.no_grad():
+            w2 = wasserstein(
+                torch.from_numpy(endpoints.astype(np.float32)).to(device),
+                torch.from_numpy(rc_cells.astype(np.float32)).to(device),
+                reg=reg,
+            )
+        records.append({
+            "clone": clone_id,
+            "w2": float(w2),
+            "clone_size_t4": int(cmask_start.sum()),
+            "clone_size_t6": int(cmask_ref.sum()),
+        })
+
+    return pd.DataFrame(records)
