@@ -1,7 +1,7 @@
 
 # %%
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 import os, sys, re
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     config_dir = args.config_dir
 else:
-    config_dir = ""
+    config_dir = "logs/gastrulation_multiscaled/pde_params_tsense"
 
 # %%
 # find all config files
@@ -65,16 +65,19 @@ dataset_name = config.experiment_config['dataset']
 print(f'\nLoading dataset: {dataset_name}')
 adata = sc.read_h5ad(f'data/{dataset_name}.h5ad')
 
+celltype_key = 'anno_man' if 'anno_man' in adata.obs.keys() else 'celltype'
+
 # %%
 ds_config = config.dataset_config.copy()
 ds_config['timepoint_idx'] = None
 ds_config['knn_volume'] = eval(config.raw_args['knn_volume'])
 
+adata_sub = sc.pp.subsample(adata, fraction=0.3, random_state=0, copy=True)
 full_DS = PINN.reader.TwoTimpepoint_AnnDS(adata,split=None,**ds_config)
 cellstate_key = config.dataset_config['cellstate_key']
 
 
-# # %%
+# %%
 v_dict = {}
 for v in model_dict.keys():
 
@@ -93,7 +96,7 @@ for v in model_dict.keys():
     fig_g.savefig(os.path.join(result_dir,'g.png'), dpi=150, transparent=True)
     
 
-    if D_pred_ay.shape[-1] > 1:
+    if len(D_pred_ay.shape) > 2:
         pass
     else:
         fig_D,axs = PINN.pl.params_in_umap(adata, D_pred_ay.squeeze(), param=r'$D$')
@@ -118,14 +121,14 @@ for v in model_dict.keys():
         # vis
         fig_velocity = plt.figure(dpi=120, figsize=(4,4))
         ax = fig_velocity.gca()
-        scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
+        scv.pl.velocity_embedding_stream(cellstate_ad, color=celltype_key, vkey=vkey, 
                                         basis='umap', ax=ax, 
                                         legend_loc='right', alpha=0.01,
                                         title=vkey, 
                                         save=f"{result_dir}/{vkey}_velo.png")
         
         legend = 'right' if i%3 == 2 else 'none'
-        scv.pl.velocity_embedding_stream(cellstate_ad, color='anno_man', vkey=vkey, 
+        scv.pl.velocity_embedding_stream(cellstate_ad, color=celltype_key, vkey=vkey, 
                                         basis='umap', ax=axs[i], 
                                         legend_loc=legend, alpha=0.01,
                                         title=vkey)
@@ -133,6 +136,7 @@ for v in model_dict.keys():
         i += 1
     fig_velocity_time.savefig(os.path.join(result_dir,'velocity_time.png'), dpi=300, transparent=True)
 
+# %%
 # ploting simulation
 
 performance_js = []
@@ -150,10 +154,10 @@ for v in model_dict:
     fig_ub,axs = PINN.pl.params_in_umap(adata, u_b, param=r'$u_b$')
     fig_ub.savefig(os.path.join(result_dir,'u_b.png'), dpi=150, transparent=True)
 
-    fig_uint,axs = PINN.pl.params_in_umap(adata, u_b, param=r'$u_{sim}$')
+    fig_uint,axs = PINN.pl.params_in_umap(adata, u_int_all, param=r'$u_{sim}$')
     fig_uint.savefig(os.path.join(result_dir,'u_int.png'), dpi=150, transparent=True)
 
-    fig_loguint,axs = PINN.pl.params_in_umap(adata, np.log(u_b+1e-10), param=r'$\log {u_{sim}}$')
+    fig_loguint,axs = PINN.pl.params_in_umap(adata, np.log(u_int_all+1e-10), param=r'$\log {u_{sim}}$')
     fig_loguint.savefig(os.path.join(result_dir,'log_u_sim.png'), dpi=150, transparent=True)
 
     KLD_ls = PINN.tl.KLD_density(u_b, u_int_all)
