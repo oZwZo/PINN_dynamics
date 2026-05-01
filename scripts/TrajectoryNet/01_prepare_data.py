@@ -14,13 +14,15 @@ Note: We pre-standardize and do NOT pass --whiten to TrajectoryNet.
 Usage
 -----
 python scripts/TrajectoryNet/01_prepare_data.py \
-    --data_path data/klein/klein_addpop.h5ad \
+    --data_path data/klein_addpop.h5ad \
     --output_dir logs/TrajectoryNet --run_name pca30 \
+    --celltype_col Annotation \
     --obsm_key X_pca --n_dims 30
 
 python scripts/TrajectoryNet/01_prepare_data.py \
-    --data_path data/klein/klein_addpop.h5ad \
+    --data_path data/klein_addpop.h5ad \
     --output_dir logs/TrajectoryNet --run_name dm10 \
+    --celltype_col Annotation \
     --obsm_key DM_EigenVectors --n_dims 10
 """
 

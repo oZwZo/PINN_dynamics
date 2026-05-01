@@ -54,8 +54,8 @@ def parse_args():
                    help="Timepoint column in adata.obs (default: timepoint_tx_days)")
     p.add_argument("--well_col", default="Well",
                    help="Well column for train/test split (default: Well)")
-    p.add_argument("--celltype_col", default="label_man",
-                   help="Cell-type annotation column (default: label_man)")
+    p.add_argument("--celltype_col", default="Annotation",
+                   help="Cell-type annotation column (default: Annotation)")
     p.add_argument("--subsample", type=int, default=2000,
                    help="Max cells per timepoint (default: 2000, 0=no subsampling)")
     p.add_argument("--seed", type=int, default=42,

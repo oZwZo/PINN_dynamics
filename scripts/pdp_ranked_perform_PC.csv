@@ -1,0 +1,7 @@
+,accuracy,pearson_r,pearson_p,n_start_cells,n_sims,k_nn,obsm_key,n_dims,t_end_norm,noise_scale,model_dir,sim_fn
+0,0.4790743476120138,0.966305653114233,5.414234218375982e-06,2031,100,15,X_pca_scaled,30,2.0,1.0,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm1_lv1_lgNone/pde_params_tsense/V0_config.json,sb
+0,0.4726735598227474,0.9497963305643308,2.6152466064254308e-05,2031,100,15,X_pca_scaled,30,0.5,2.0,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm2_lgNone/pde_params_tsense/V0_config.json,sb
+0,0.4593796159527326,0.9719811610105948,2.6067598515558577e-06,2031,100,15,X_pca_scaled,30,2.0,1.0,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm1_lgNone/pde_params_tsense/V0_config.json,sb
+0,0.4574101427868045,0.9626221071522804,8.162498816407365e-06,2031,100,15,X_pca_scaled,30,2.0,1.0,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC_30_lD1_lv1_lgNone/pde_params_tsense/V0_config.json,sb
+0,0.4401772525849335,0.925270960726182,0.000124579928885,2031,100,15,X_pca_scaled,30,0.5,1.5,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm10_lgNone_b1024/pde_params_tsense/V0_config.json,sb
+0,0.4273756770064008,0.911328692059974,0.0002427355166338,2031,100,15,X_pca_scaled,30,0.5,1.0,/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm10_lgNone/pde_params_tsense/V0_config.json,sb

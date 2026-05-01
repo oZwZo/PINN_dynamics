@@ -105,12 +105,10 @@ import logging
 import torch
 import numpy as np
 import scanpy as sc
-import pseudodynamics as pdp
 import pandas as pd
 import sklearn.metrics
 from scipy.stats import pearsonr
 from sklearn.neighbors import KNeighborsClassifier
-from torchcfm.optimal_transport import wasserstein
 log = logging.getLogger(__name__)
 
 
@@ -150,7 +148,7 @@ def predict_fates_per_cell(
         f" × {n_sims} sims ..."
     )
     endpoints = np.asarray(simulation_func(start_cells, model, n_sims, device))
-
+    print("endpoints shape :", endpoints.shape)
     n_cells  = len(start_cells)
     ct_index = {ct: i for i, ct in enumerate(cell_types)}
 
@@ -376,12 +374,12 @@ def make_prescient_sim_fn(num_steps: int = None):
         ).to(device)
 
         net.eval()
-        with torch.no_grad():
-            for _ in range(steps):
-                z = torch.randn_like(x) * config.train_sd
-                x = net._step(x, dt=config.train_dt, z=z)
+        # with torch.no_grad():
+        for _ in range(steps):
+            z = torch.randn_like(x) * config.train_sd
+            x = net._step(x, dt=config.train_dt, z=z)
 
-        return x.cpu().numpy().reshape(n_cells, n_sims, n_dims)
+        return x.detach().cpu().numpy().reshape(n_cells, n_sims, n_dims)
 
     return _simulate
 
@@ -669,17 +667,27 @@ def make_trajectorynet_sim_fn(int_tp_start: float, int_tp_end: float):
 
     def _simulate(start_cells, model, n_sims, device):
         cnf_model = model
-        z    = torch.tensor(start_cells, dtype=torch.float32).to(device)
-        zero = torch.zeros(z.shape[0], 1, device=device)
-        int_times = torch.tensor(
-            [int_tp_start, int_tp_end], dtype=torch.float32
-        ).to(device)
+        zs = [torch.tensor(start_cells, dtype=torch.float32).to(device)]
+        zero = torch.zeros(zs[0].shape[0], 1, device=device)
+        # int_times = torch.tensor(
+        #     [int_tp_start, int_tp_end], dtype=torch.float32
+        # ).to(device)
+
+        int_tps = np.linspace(int_tp_start, int_tp_end, 100)
 
         cnf = cnf_model.chain[0]
-        # with torch.no_grad():
-        z_out, _ = cnf(z, zero, integration_times=int_times, reverse=False)
+        for i, itp in enumerate(int_tps[1:]):
+            # tp counts down from last
+            timescale = int_tps[1] - int_tps[0]
+            integration_times = torch.tensor([itp - timescale, itp])
+            # integration_times = torch.tensor([np.linspace(itp - args.time_scale, itp, ntimes)])
+            integration_times = integration_times.type(torch.float32).to(device)
 
-        return z_out.detach().cpu().numpy()   # (n_cells, n_dims)
+            # transform to previous timepoint
+            z, _ = cnf(zs[-1], zero, integration_times=integration_times, reverse=True)
+            zs.append(z)
+
+        return z.detach().cpu().numpy()   # (n_cells, n_dims)
 
     return _simulate
 
@@ -820,9 +828,118 @@ def make_sf2m_sde_sim_fn(t_start: float = 0.0, t_end: float = 2.0,
     return _simulate
 
 
+def make_mioflow_sim_fn(t_start: float, t_end: float, n_steps: int = 100,
+                        autoencoder=None, recon: bool = False):
+    """
+    Return a simulation_func for MIOFlow using generate_points().
+
+    Usage
+    -----
+        model = toy_model      # MIOFlow ToyModel (wraps ToyODE + odeint)
+        sim_fn = make_mioflow_sim_fn(t_start=2.0, t_end=6.0)
+
+        endpoints = sim_fn(start_cells, model, n_sims=1, device="cuda:0")
+        # returns ndarray (n_cells, n_dims) — deterministic ODE
+
+    Parameters
+    ----------
+    autoencoder : MIOFlow Autoencoder or None
+        If provided (with recon=True), generate_points encodes input,
+        runs ODE in latent space, then decodes back to original space.
+    recon : bool
+        Whether to use encode/decode via the autoencoder.
+
+    Notes
+    -----
+    Wraps MIOFlow's generate_points() with sample_time=np.linspace(t_start,
+    t_end, n_steps). Builds a temporary DataFrame from start_cells so
+    generate_points can consume it.
+    """
+    from MIOFlow.eval import generate_points
+
+    def _simulate(start_cells, model, n_sims, device):
+        n_cells, n_dims = start_cells.shape
+        use_cuda = "cuda" in str(device) and torch.cuda.is_available()
+
+        # Build df for generate_points (cells at t_start)
+        df = pd.DataFrame(
+            start_cells,
+            columns=[f"d{i}" for i in range(1, n_dims + 1)],
+        )
+        df["samples"] = int(t_start)
+
+        sample_time = np.linspace(t_start, t_end, n_steps)
+        generated = generate_points(
+            model, df, n_points=n_cells,
+            sample_with_replacement=False,
+            use_cuda=use_cuda,
+            sample_time=sample_time,
+            autoencoder=autoencoder,
+            recon=recon,
+        )
+        # generated: (n_steps, n_cells, n_dims)
+        return generated[-1]  # (n_cells, n_dims)
+
+    return _simulate
+
+
+# ─── Unstandardization helpers ───────────────────────────────────────────────
+
+def inverse_standardize(x, scaler):
+    """
+    Inverse z-score standardization: x_original = x * std + mean.
+
+    Parameters
+    ----------
+    x      : ndarray (n, d)
+    scaler : dict-like with keys 'mean' and 'std', each ndarray (d,).
+             If None, returns x unchanged.
+
+    Returns
+    -------
+    ndarray (n, d)
+    """
+    if scaler is None:
+        return x
+    return x * np.asarray(scaler['std']) + np.asarray(scaler['mean'])
+
+
+def compute_scaler_from_adata(adata, scaled_key, n_dims):
+    """
+    Compute scaler (mean, std) from adata by inferring the unscaled key.
+
+    For pseudodynamics+, the adata contains both 'X_pca_scaled' and 'X_pca'
+    (or 'DM_EigenVectors_scaled' and 'DM_EigenVectors').  The scaler is
+    computed as mean/std of the unscaled version over ALL cells.
+
+    Parameters
+    ----------
+    adata      : AnnData — FULL adata (not just test subset).
+    scaled_key : str — e.g. 'X_pca_scaled', 'DM_EigenVectors_scaled'.
+    n_dims     : int
+
+    Returns
+    -------
+    dict with 'mean' and 'std' (each ndarray of shape (n_dims,)),
+    or None if the key does not end with '_scaled'.
+    """
+    if not scaled_key.endswith('_scaled'):
+        return None
+    raw_key = scaled_key.replace('_scaled', '')
+    if raw_key not in adata.obsm:
+        raise KeyError(
+            f"Expected unscaled key '{raw_key}' in adata.obsm but not found. "
+            f"Available keys: {list(adata.obsm.keys())}"
+        )
+    raw = adata.obsm[raw_key][:, :n_dims].astype(np.float64)
+    mean = raw.mean(axis=0)
+    std = np.clip(raw.std(axis=0), 1e-6, None)
+    return {'mean': mean, 'std': std}
+
+
 # ─── Method-agnostic W2 helpers ─────────────────────────────────────────────
 
-def compute_w2(x_sim, x_true):
+def compute_w2(x_sim, x_true, device: str = "cpu"):
     """
     Compute exact W2 distance using POT library.
 
@@ -836,17 +953,25 @@ def compute_w2(x_sim, x_true):
     float : W2 distance
     """
     import ot
-    x_s = np.asarray(x_sim, dtype=np.float64)
-    x_t = np.asarray(x_true, dtype=np.float64)
-    n_s, n_t = x_s.shape[0], x_t.shape[0]
-    w_a = np.ones(n_s) / n_s
-    w_b = np.ones(n_t) / n_t
-    M = ot.dist(x_s, x_t, metric='sqeuclidean')
-    w2_sq = ot.emd2(w_a, w_b, M)
-    return float(np.sqrt(max(w2_sq, 0.0)))
+    from torchcfm.optimal_transport import wasserstein
+    # x_s = np.asarray(x_sim, dtype=np.float64)
+    # x_t = np.asarray(x_true, dtype=np.float64)
+    # n_s, n_t = x_s.shape[0], x_t.shape[0]
+    # w_a = np.ones(n_s) / n_s
+    # w_b = np.ones(n_t) / n_t
+    # M = ot.dist(x_s, x_t, metric='sqeuclidean')
+    # w2_sq = ot.emd2(w_a, w_b, M)
+
+    # return float(np.sqrt(max(w2_sq, 0.0)))
+    with torch.no_grad():
+        w2 = wasserstein(torch.from_numpy(x_sim.astype(np.float32)).to(device), 
+                     torch.from_numpy(x_true.astype(np.float32)).to(device),
+                     reg=0.05)
+    
+    return w2
 
 
-def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
+def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000, scaler=None):
     """
     Evaluate W2 distance over a list of tasks.
 
@@ -860,6 +985,9 @@ def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
         Number of replicates (with random subsampling).
     n_sim_cells : int
         Max cells per replicate for W2 computation.
+    scaler : dict-like with 'mean'/'std' or None
+        If provided, simulated and target embeddings are inverse-standardized
+        before computing W2.
 
     Returns
     -------
@@ -867,6 +995,7 @@ def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
     """
     results = []
     for task in eval_tasks:
+        tgt_orig = inverse_standardize(task['target_emb'], scaler)
         for rep in range(n_sims):
             src = task['src_emb']
             if src.shape[0] > n_sim_cells:
@@ -874,8 +1003,9 @@ def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
                 src = src[idx]
 
             z_sim = simulate_fn(src, task['t_start'], task['t_end'])
+            z_sim = inverse_standardize(z_sim, scaler)
 
-            tgt = task['target_emb']
+            tgt = tgt_orig
             if tgt.shape[0] > n_sim_cells:
                 tgt = tgt[np.random.choice(tgt.shape[0], n_sim_cells, replace=False)]
             if z_sim.shape[0] > n_sim_cells:
@@ -886,101 +1016,222 @@ def eval_w2_tasks(eval_tasks, simulate_fn, n_sims=10, n_sim_cells=5000):
     return results
 
 
-def klein_w2_v1(test_ad:sc.AnnData,
-              clone_proportions:pd.DataFrame, 
-              config:pdp.ExperimentConfig, 
-              device:torch.device, 
-              sim_fn:callable, 
-              n_sims=10, 
-              reg=0.05):
-    R"""
-    Compute W2 loss from t4 cells to t6 cells for testset specific clones
-    """
+# ─── Method-agnostic population & per-clone W2 ──────────────────────────────
 
-    # get some data key
+def compute_w2_population(
+    src_cells: np.ndarray,
+    target_cells: np.ndarray,
+    model,
+    sim_fn: callable,
+    n_sims: int = 10,
+    device: str = "cpu",
+    scaler=None,
+):
+    """
+    Compute population-level W2 in both standardized and raw space.
+
+    Parameters
+    ----------
+    src_cells    : ndarray (n_src, n_dims) — source cells to simulate forward.
+    target_cells : ndarray (n_tgt, n_dims) — observed target cells.
+    model        : model object, passed to sim_fn.
+    sim_fn       : callable(start_cells, model, n_sims, device) -> ndarray.
+    n_sims       : trajectories per cell (for stochastic; deterministic ignores).
+    device       : torch device string.
+    scaler       : dict with 'mean'/'std' or None.
+
+    Returns
+    -------
+    dict with keys 'w2_scaled' and 'w2_raw'.
+    """
+    endpoints = np.asarray(sim_fn(src_cells, model, n_sims, device))
+    # Flatten stochastic: (n_cells, n_sims, n_dims) → (n_cells*n_sims, n_dims)
+    if endpoints.ndim == 3:
+        endpoints = endpoints.reshape(-1, endpoints.shape[-1])
+
+    w2_scaled = compute_w2(endpoints, target_cells)
+
+    if scaler is not None:
+        ep_raw = inverse_standardize(endpoints, scaler)
+        tgt_raw = inverse_standardize(target_cells, scaler)
+        w2_raw = compute_w2(ep_raw, tgt_raw)
+    else:
+        w2_raw = w2_scaled
+
+    return {"w2_scaled": w2_scaled, "w2_raw": w2_raw}
+
+
+def compute_w2_per_clone(
+    src_cells: np.ndarray,
+    src_clone_ids: np.ndarray,
+    target_cells: np.ndarray,
+    target_clone_ids: np.ndarray,
+    model,
+    sim_fn: callable,
+    n_sims: int = 10,
+    device: str = "cpu",
+    scaler=None,
+):
+    """
+    Compute per-clone W2 distance in both standardized and raw space.
+
+    Parameters
+    ----------
+    src_cells        : ndarray (n_src, n_dims)
+    src_clone_ids    : array-like (n_src,) — clone ID per source cell.
+    target_cells     : ndarray (n_tgt, n_dims)
+    target_clone_ids : array-like (n_tgt,) — clone ID per target cell.
+    model, sim_fn, n_sims, device, scaler : see compute_w2_population.
+
+    Returns
+    -------
+    DataFrame with columns: clone, w2_scaled, w2_raw, clone_size_src, clone_size_tgt.
+    """
+    src_ids = np.asarray(src_clone_ids)
+    tgt_ids = np.asarray(target_clone_ids)
+    shared_clones = sorted(set(src_ids) & set(tgt_ids))
+
+    records = []
+    for clone_id in shared_clones:
+        s_mask = src_ids == clone_id
+        t_mask = tgt_ids == clone_id
+        if s_mask.sum() == 0 or t_mask.sum() == 0:
+            continue
+
+        sc_cells = src_cells[s_mask]
+        tc_cells = target_cells[t_mask]
+
+        endpoints = np.asarray(sim_fn(sc_cells, model, n_sims, device))
+        if endpoints.ndim == 3:
+            endpoints = endpoints.reshape(-1, endpoints.shape[-1])
+
+        w2_scaled = compute_w2(endpoints, tc_cells)
+
+        if scaler is not None:
+            ep_raw = inverse_standardize(endpoints, scaler)
+            tc_raw = inverse_standardize(tc_cells, scaler)
+            w2_raw = compute_w2(ep_raw, tc_raw)
+        else:
+            w2_raw = w2_scaled
+
+        records.append({
+            "clone": clone_id,
+            "w2_scaled": w2_scaled,
+            "w2_raw": w2_raw,
+            "clone_size_src": int(s_mask.sum()),
+            "clone_size_tgt": int(t_mask.sum()),
+        })
+
+    return pd.DataFrame(records)
+
+
+# ─── Legacy pseudodynamics-specific W2 helpers ──────────────────────────────
+
+def klein_w2_v1(test_ad: sc.AnnData,
+                clone_proportions: pd.DataFrame,
+                config,
+                device: str,
+                sim_fn: callable,
+                n_sims: int = 10,
+                scaler=None):
+    R"""
+    Population-level W2 from t4 → t6 over testset clones.
+
+    Returns
+    -------
+    dict with keys 'w2_scaled' and 'w2_raw'.
+    Both computed via `compute_w2` (entropic OT, reg=0.05) — same backend
+    as PRESCIENT / sf2m / otcfm. `w2_raw` requires `scaler`; otherwise it
+    equals `w2_scaled`.
+    """
+    import pseudodynamics as pdp
+
     n_dims = config.dataset_config['n_dimension']
     cellstate_key = config.dataset_config.get("cellstate_key", None)
-    timepoint_key = config.dataset_config.get("timepoint_key", "timepoint_tx_days")
 
-
-    # get start cell
     w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
     w2_test_ad = test_ad[w2_clone_mask].copy()
     start_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
-    start_cells = start_ad.obsm[cellstate_key][:,:n_dims]
-
-    # ref : ground truth
     ref_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
-    ref_cells = ref_ad.obsm[cellstate_key][:,:n_dims]
 
-    # load model
+    start_cells = start_ad.obsm[cellstate_key][:, :n_dims]
+    ref_cells = ref_ad.obsm[cellstate_key][:, :n_dims]
+
     pde_model = pdp.models.pde_params.load_from_checkpoint(
-    config.find_lastest_ckpt()).to(device)
+        config.find_lastest_ckpt()).to(device)
 
     endpoints = np.asarray(sim_fn(start_cells, pde_model, n_sims, device))
     endpoints = endpoints.reshape(-1, start_cells.shape[1])
 
-    with torch.no_grad():
-        w2 = wasserstein(
-            torch.from_numpy(endpoints).to(device),
-            torch.from_numpy(ref_cells).to(device),
-            reg=reg
-            )
-    return w2
+    w2_scaled = compute_w2(endpoints, ref_cells, device=device)
+    if scaler is not None:
+        ep_raw = inverse_standardize(endpoints, scaler)
+        rc_raw = inverse_standardize(ref_cells, scaler)
+        w2_raw = compute_w2(ep_raw, rc_raw, device=device)
+    else:
+        w2_raw = w2_scaled
+
+    return {"w2_scaled": float(w2_scaled), "w2_raw": float(w2_raw)}
 
 
 def klein_w2_v2(test_ad: sc.AnnData,
                 clone_proportions: pd.DataFrame,
-                config: pdp.ExperimentConfig,
-                device: torch.device,
+                config,
+                device: str,
                 sim_fn: callable,
-                n_sims=10,
-                reg=0.05):
+                n_sims: int = 10,
+                scaler=None):
     R"""
-    Compute per-clone W2 distance from t4 cells to t6 cells for testset clones.
+    Per-clone W2 from t4 → t6 over testset clones.
 
     Returns
     -------
-    pd.DataFrame with columns: clone, w2, clone_size_t4, clone_size_t6
+    DataFrame with columns: clone, w2_scaled, w2_raw, clone_size_t4, clone_size_t6.
+    Same backend (`compute_w2`, reg=0.05) as PRESCIENT / sf2m / otcfm.
     """
+    import pseudodynamics as pdp
+
     n_dims = config.dataset_config['n_dimension']
     cellstate_key = config.dataset_config.get("cellstate_key", None)
 
-    # filter to clones present in clone_proportions
     w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
     w2_test_ad = test_ad[w2_clone_mask].copy()
 
-    # load model
     pde_model = pdp.models.pde_params.load_from_checkpoint(
         config.find_lastest_ckpt()).to(device)
 
     start_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
     ref_ad = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
 
+    ref_all_scaled = ref_ad.obsm[cellstate_key][:, :n_dims]
+    ref_all_raw = inverse_standardize(ref_all_scaled, scaler) if scaler is not None else ref_all_scaled
+
     clones = start_ad.obs.clones.unique()
     records = []
     for clone_id in clones:
-        # start cells for this clone
         cmask_start = start_ad.obs.clones == clone_id
         cmask_ref = ref_ad.obs.clones == clone_id
         if cmask_start.sum() == 0 or cmask_ref.sum() == 0:
             continue
 
         sc_cells = start_ad[cmask_start].obsm[cellstate_key][:, :n_dims]
-        rc_cells = ref_ad[cmask_ref].obsm[cellstate_key][:, :n_dims]
+        rc_scaled = ref_all_scaled[cmask_ref.values]
+        rc_raw = ref_all_raw[cmask_ref.values]
 
         endpoints = np.asarray(sim_fn(sc_cells, pde_model, n_sims, device))
         endpoints = endpoints.reshape(-1, sc_cells.shape[1])
 
-        with torch.no_grad():
-            w2 = wasserstein(
-                torch.from_numpy(endpoints.astype(np.float32)).to(device),
-                torch.from_numpy(rc_cells.astype(np.float32)).to(device),
-                reg=reg,
-            )
+        w2_scaled = compute_w2(endpoints, rc_scaled, device=device)
+        if scaler is not None:
+            ep_raw = inverse_standardize(endpoints, scaler)
+            w2_raw = compute_w2(ep_raw, rc_raw, device=device)
+        else:
+            w2_raw = w2_scaled
+
         records.append({
             "clone": clone_id,
-            "w2": float(w2),
+            "w2_scaled": float(w2_scaled),
+            "w2_raw": float(w2_raw),
             "clone_size_t4": int(cmask_start.sum()),
             "clone_size_t6": int(cmask_ref.sum()),
         })

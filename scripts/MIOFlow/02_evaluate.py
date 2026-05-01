@@ -10,12 +10,12 @@ Evaluates a trained MIOFlow model on held-out test cells (Well == 2):
 Usage
 -----
 python scripts/MIOFlow/02_evaluate.py \
-    --data_path data/klein/klein_addpop.h5ad \
+    --data_path data/klein_addpop.h5ad \
     --model_dir results/MIOFlow/klein_addpop_pca30 \
     --obsm_key X_pca --n_dims 30
 
 python scripts/MIOFlow/02_evaluate.py \
-    --data_path data/klein/klein_addpop.h5ad \
+    --data_path data/klein_addpop.h5ad \
     --model_dir results/MIOFlow/klein_addpop_dm10 \
     --obsm_key DM_EigenVectors --n_dims 10
 """

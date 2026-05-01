@@ -1,27 +1,25 @@
-#!/rds/user/wz369/hpc-work/LIBS/mamba/envs/mioflow/bin/python
 """
-TIGON Evaluation Script
-========================
-Evaluates a trained TIGON model on held-out test cells:
-  1. Forward simulation via TorchDiffEqPack's odesolve
-  2. W2 (Wasserstein-2) distance between simulated and observed test cells
-  3. Fate bias: KNN-assigned fate fractions vs. observed test fractions
+TIGON Combined Evaluation Script
+===================================
+Evaluates a trained TIGON model on held-out test cells.
+Computes all metrics (fate accuracy, Pearson r, W2) in one run.
 
-Evaluation tasks:
-  - tp=2->4 (norm 0->1): Simulate from train cells at tp=2 -> compare to test at tp=4
-  - tp=4->6 (norm 1->2): Simulate from test cells at tp=4 -> compare to test at tp=6
+Cell extraction follows the pseudodynamics+ pattern: cells are matched
+by barcode from adata (not from test_cells.npz), embeddings are
+standardized before simulation, and inverse-standardized for W2.
+
+Outputs:
+  - eval_combined.csv        (one row per sim_mode)
+  - F_hat_{mode}.csv         (per-cell fate predictions)
+  - w2_per_clone_{mode}.csv  (per-clone W2 distances)
 
 Usage
 -----
 python scripts/TIGON/03_evaluate.py \
     --data_dir logs/TIGON/pca \
     --checkpoint logs/TIGON/pca/model/ckpt.pth \
-    --hidden_dim 64 --gpu 0
-
-python scripts/TIGON/03_evaluate.py \
-    --data_dir logs/TIGON/dm \
-    --checkpoint logs/TIGON/dm/model/ckpt.pth \
-    --hidden_dim 64 --gpu 0
+    --data_path data/klein_addpop.h5ad \
+    --device cuda:0
 """
 
 import os
@@ -32,322 +30,219 @@ import logging
 
 import numpy as np
 import pandas as pd
+import scanpy as sc
 import torch
-from sklearn.neighbors import KNeighborsClassifier
-from scipy.stats import pearsonr
 
 sys.path.insert(0, '/rds/user/wz369/hpc-work/TIGON')
+from utility import UOT
 
-from TorchDiffEqPack import odesolve
-from utility import UOT, initialize_weights
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+import fate_eval_pipeline as fate_eval
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
 
+def standardize(x, scaler):
+    """Apply z-score standardization: (x - mean) / std."""
+    if scaler is None:
+        return x
+    return (x - np.asarray(scaler['mean'])) / np.asarray(scaler['std'])
+
+
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Evaluate a trained TIGON model (W2 + fate bias)"
+        description="Combined evaluation for TIGON (fate accuracy + W2)"
     )
     p.add_argument("--data_dir", required=True,
-                   help="Dir with scaler.npz, test_cells.npz, train_meta.npz, config.json")
+                   help="Dir with scaler.npz, config.json, model checkpoint")
     p.add_argument("--checkpoint", required=True,
                    help="Path to TIGON .pth checkpoint")
-    p.add_argument("--hidden_dim", type=int, default=64,
-                   help="Hidden dim (must match training, default: 64)")
-    p.add_argument("--n_hiddens", type=int, default=4,
-                   help="Number of hidden layers (must match training, default: 4)")
-    p.add_argument("--activation", default="Tanh",
-                   help="Activation function (must match training, default: Tanh)")
-    p.add_argument("--gpu", type=int, default=0,
-                   help="GPU device index (default: 0)")
-    p.add_argument("--n_sims", type=int, default=10,
-                   help="Simulation replicates (default: 10)")
-    p.add_argument("--n_sim_cells", type=int, default=5000,
-                   help="Cells to simulate per replicate (default: 5000)")
-    p.add_argument("--output", default=None,
-                   help="Output CSV path (default: data_dir/eval_results.csv)")
+    p.add_argument("--data_path", default="data/klein_addpop.h5ad",
+                   help="Path to .h5ad file (for barcodes, clones, embeddings)")
+    p.add_argument("--F_obs_path", default="data/klein/F_obs.csv",
+                   help="Ground-truth fate proportions CSV")
+    p.add_argument("--clone_proportions", default="data/klein/clone_proportions.csv",
+                   help="Clone proportions CSV")
+    p.add_argument("--celltype_col", default="Annotation",
+                   help="Cell-type annotation column (default: Annotation)")
+    p.add_argument("--hidden_dim", type=int, default=64)
+    p.add_argument("--n_hiddens", type=int, default=4)
+    p.add_argument("--activation", default="Tanh")
+    p.add_argument("--n_sims_fate", type=int, default=100,
+                   help="Trajectories per cell for fate (deterministic, so 1 used)")
+    p.add_argument("--n_sims_w2", type=int, default=10,
+                   help="Trajectories per cell for W2 (deterministic, so 1 used)")
+    p.add_argument("--k", type=int, default=15, help="KNN neighbors")
+    p.add_argument("--device", default="cuda:0")
+    p.add_argument("--output_dir", default=None,
+                   help="Output directory (default: data_dir/)")
     return p.parse_args()
-
-
-def forward_simulate(func, z_start, t_start, t_end, device):
-    """Forward ODE integration from t_start to t_end using TorchDiffEqPack."""
-    z = z_start.clone().detach().to(device).requires_grad_(True)
-    g0 = torch.zeros(z.shape[0], 1, dtype=torch.float32, device=device)
-    logp0 = torch.zeros(z.shape[0], 1, dtype=torch.float32, device=device)
-
-    options = {
-        'method': 'Dopri5',
-        'h': None,
-        'rtol': 1e-3,
-        'atol': 1e-5,
-        'print_neval': False,
-        'neval_max': 1000000,
-        'safety': None,
-        't0': t_start,
-        't1': t_end,
-    }
-
-    z_out, g_out, logp_out = odesolve(func, y0=(z, g0, logp0), options=options)
-    return z_out.detach(), g_out.detach()
-
-
-def compute_w2(x_sim, x_true):
-    """Compute exact W2 distance using POT library."""
-    import ot
-    x_s = x_sim.cpu().numpy().astype(np.float64)
-    x_t = x_true.cpu().numpy().astype(np.float64)
-    n_s = x_s.shape[0]
-    n_t = x_t.shape[0]
-    w_a = np.ones(n_s) / n_s
-    w_b = np.ones(n_t) / n_t
-    M = ot.dist(x_s, x_t, metric='sqeuclidean')
-    w2_sq = ot.emd2(w_a, w_b, M)
-    return float(np.sqrt(max(w2_sq, 0.0)))
-
-
-def fate_bias_accuracy(x_sim, x_train, y_train, x_test_final, y_test_final, k=15):
-    """
-    Assign simulated cells to cell types via KNN trained on train coords.
-    Compare simulated fate fractions to observed test-cell fate fractions.
-    """
-    knn = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
-    knn.fit(x_train, y_train)
-
-    sim_labels = knn.predict(x_sim)
-    cell_types = sorted(np.unique(np.concatenate([y_train, y_test_final])))
-
-    sim_frac = {ct: np.mean(sim_labels == ct) for ct in cell_types}
-    obs_frac = {ct: np.mean(y_test_final == ct) for ct in cell_types}
-
-    sim_vec = np.array([sim_frac[ct] for ct in cell_types])
-    obs_vec = np.array([obs_frac[ct] for ct in cell_types])
-
-    if sim_vec.std() < 1e-10 or obs_vec.std() < 1e-10:
-        r, pval = 0.0, 1.0
-    else:
-        r, pval = pearsonr(sim_vec, obs_vec)
-
-    return dict(
-        pearson_r=r,
-        pearson_p=pval,
-        simulated_fractions=sim_frac,
-        observed_fractions=obs_frac,
-        cell_types=cell_types,
-    )
 
 
 def main():
     args = parse_args()
 
-    device = torch.device('cuda:' + str(args.gpu)
-                          if torch.cuda.is_available() else 'cpu')
-    log.info(f"Using device: {device}")
+    device = args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu"
+    log.info(f"Device: {device}")
 
-    output_path = args.output or os.path.join(args.data_dir, "eval_results.csv")
+    output_dir = args.output_dir or args.data_dir
+    os.makedirs(output_dir, exist_ok=True)
 
-    # ── load config ──
+    # ── Load config ──
     config_path = os.path.join(args.data_dir, "config.json")
     with open(config_path) as f:
         config = json.load(f)
     in_out_dim = config["in_out_dim"]
+    n_dims = in_out_dim
     norm_tps = config["normalized_timepoints"]
-    log.info(f"  Config: in_out_dim={in_out_dim}, norm_tps={norm_tps}")
+    obsm_key = config.get("obsm_key", "X_pca")
+    log.info(f"Config: in_out_dim={in_out_dim}, obsm_key={obsm_key}, norm_tps={norm_tps}")
 
-    # ── load model ──
+    # ── Load model ──
     func = UOT(in_out_dim=in_out_dim,
                hidden_dim=args.hidden_dim,
                n_hiddens=args.n_hiddens,
                activation=args.activation).to(device)
-
     checkpoint = torch.load(args.checkpoint, map_location=device)
     func.load_state_dict(checkpoint['func_state_dict'])
     func.eval()
-    log.info(f"  Loaded model from {args.checkpoint}")
+    log.info(f"Loaded model from {args.checkpoint}")
 
-    # ── load train metadata ──
-    train_meta = np.load(os.path.join(args.data_dir, "train_meta.npz"),
-                         allow_pickle=True)
-    train_embs = train_meta["embeddings"]  # object array, one per tp
-    train_cts = train_meta["celltypes"]    # object array, one per tp
+    # ── Load scaler ──
+    scaler_path = os.path.join(args.data_dir, "scaler.npz")
+    scaler = dict(np.load(scaler_path)) if os.path.exists(scaler_path) else None
+    log.info(f"Scaler: {'loaded' if scaler else 'None'}")
 
-    # ── load test cells ──
-    test_data = np.load(os.path.join(args.data_dir, "test_cells.npz"),
-                        allow_pickle=True)
-    test_emb = test_data["embeddings"]       # (n_test, n_dims)
-    test_tps = test_data["timepoints"]       # normalized
-    test_cts = test_data["celltypes"]
+    # ── Load adata ──
+    log.info(f"Loading adata: {args.data_path}")
+    adata = sc.read_h5ad(args.data_path)
 
-    log.info(f"  Test cells: {test_emb.shape[0]}")
-    log.info(f"  Test timepoints (norm): {np.unique(test_tps)}")
+    # ── Load ground truth ──
+    F_obs = pd.read_csv(args.F_obs_path, index_col=0)
+    F_obs.index = F_obs.index.astype(str)
+    F_obs = F_obs[F_obs.index.isin(adata.obs_names.astype(str))]
 
-    # ── define evaluation tasks ──
-    # Task 1: tp=0 -> tp=1 (start from train tp=0, compare to test tp=1)
-    # Task 2: tp=1 -> tp=2 (start from test tp=1, compare to test tp=2)
-    eval_tasks = []
-    for i in range(len(norm_tps) - 1):
-        t_start = norm_tps[i]
-        t_end = norm_tps[i + 1]
+    clone_proportions = pd.read_csv(args.clone_proportions, index_col=0)
 
-        # source cells: train cells at t_start (for first transition),
-        # test cells at t_start (for subsequent transitions)
-        if i == 0:
-            src_emb = train_embs[i].astype(np.float32)
-            src_label = "train"
-        else:
-            mask = np.isclose(test_tps, t_start, atol=1e-3)
-            src_emb = test_emb[mask].astype(np.float32)
-            src_label = "test"
+    # ═══════════════════════════════════════════════════════════════════════
+    # FATE EVALUATION — extract start cells from adata by F_obs barcodes
+    # ═══════════════════════════════════════════════════════════════════════
+    fobs_idx_str = F_obs.index.astype(str)
+    valid_mask = adata.obs_names.astype(str).isin(fobs_idx_str)
+    start_cells_raw = adata[valid_mask].obsm[obsm_key][:, :n_dims].astype(np.float32)
+    start_barcodes = list(adata[valid_mask].obs_names.astype(str))
+    start_cells_fate = standardize(start_cells_raw, scaler).astype(np.float32)
+    log.info(f"Fate start cells: {len(start_cells_fate)} (matched from F_obs)")
 
-        # target: test cells at t_end
-        target_mask = np.isclose(test_tps, t_end, atol=1e-3)
-        target_emb = test_emb[target_mask].astype(np.float32)
-        target_cts = test_cts[target_mask]
+    # Reference: ALL train cells (standardized) — matches pseudodynamics+ pattern
+    adata_train = adata[adata.obs.Well != 2]
+    tp_col = config.get("tp_col", "timepoint_tx_days")
+    tp_values = sorted(adata_train.obs[tp_col].unique())
+    last_tp = tp_values[-1]
+    x_ref_raw = adata_train.obsm[obsm_key][:, :n_dims].astype(np.float32)
+    x_ref = standardize(x_ref_raw, scaler).astype(np.float32)
+    y_ref = adata_train.obs[args.celltype_col].values.astype(str)
 
-        # KNN reference: train cells at target timepoint
-        tp_idx = i + 1
-        knn_train_emb = train_embs[tp_idx].astype(np.float32)
-        knn_train_cts = train_cts[tp_idx]
+    # Fate: simulate from norm_tp[0] to norm_tp[-1]
+    t_start_fate = float(norm_tps[0])
+    t_end_fate = float(norm_tps[-1])
 
-        eval_tasks.append({
-            "name": f"tp{t_start:.0f}_to_{t_end:.0f}",
-            "t_start": t_start,
-            "t_end": t_end,
-            "src_emb": src_emb,
-            "src_label": src_label,
-            "target_emb": target_emb,
-            "target_cts": target_cts,
-            "knn_train_emb": knn_train_emb,
-            "knn_train_cts": knn_train_cts,
-        })
+    # ═══════════════════════════════════════════════════════════════════════
+    # W2 EVALUATION — extract clone-filtered test cells from adata
+    # ═══════════════════════════════════════════════════════════════════════
+    test_ad = adata[adata.obs.Well == 2]
+    w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
+    w2_test_ad = test_ad[w2_clone_mask]
 
-    # ── run evaluations ──
-    all_results = []
-    last_fate_results = {}  # store last replicate's fate result per task
+    src_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
+    tgt_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
 
-    for task in eval_tasks:
-        log.info(f"\n{'='*60}")
-        log.info(f"Eval: {task['name']} ({task['src_label']} cells at t={task['t_start']} "
-                 f"-> test cells at t={task['t_end']})")
-        log.info(f"  Source cells:  {task['src_emb'].shape[0]}")
-        log.info(f"  Target cells:  {task['target_emb'].shape[0]}")
+    # Extract raw embeddings then standardize for simulation
+    src_cells_w2_raw = src_ad_w2.obsm[obsm_key][:, :n_dims].astype(np.float32)
+    tgt_cells_w2_raw = tgt_ad_w2.obsm[obsm_key][:, :n_dims].astype(np.float32)
+    src_cells_w2 = standardize(src_cells_w2_raw, scaler).astype(np.float32)
+    tgt_cells_w2 = standardize(tgt_cells_w2_raw, scaler).astype(np.float32)
 
-        target_torch = torch.tensor(task['target_emb'], dtype=torch.float32)
+    src_clones_w2 = src_ad_w2.obs.clones.values
+    tgt_clones_w2 = tgt_ad_w2.obs.clones.values
 
-        for rep in range(args.n_sims):
-            # subsample source cells
-            n_src = task['src_emb'].shape[0]
-            if n_src > args.n_sim_cells:
-                idx = np.random.choice(n_src, args.n_sim_cells, replace=False)
-                src_batch = task['src_emb'][idx]
-            else:
-                src_batch = task['src_emb']
+    log.info(f"W2 src (tp4): {len(src_cells_w2)}, tgt (tp6): {len(tgt_cells_w2)}")
 
-            src_torch = torch.tensor(src_batch, dtype=torch.float32)
-
-            # forward simulate
-            with torch.no_grad():
-                z_sim, g_sim = forward_simulate(
-                    func, src_torch, task['t_start'], task['t_end'], device
-                )
-
-            z_sim_cpu = z_sim.cpu()
-
-            # subsample target for W2 feasibility
-            n_tgt = task['target_emb'].shape[0]
-            if n_tgt > args.n_sim_cells:
-                tgt_idx = np.random.choice(n_tgt, args.n_sim_cells, replace=False)
-                tgt_sub = target_torch[tgt_idx]
-            else:
-                tgt_sub = target_torch
-
-            # subsample simulated cells to match
-            if z_sim_cpu.shape[0] > args.n_sim_cells:
-                sim_idx = np.random.choice(z_sim_cpu.shape[0], args.n_sim_cells, replace=False)
-                sim_sub = z_sim_cpu[sim_idx]
-            else:
-                sim_sub = z_sim_cpu
-
-            # W2
-            w2 = compute_w2(sim_sub, tgt_sub)
-
-            # fate bias
-            fb = fate_bias_accuracy(
-                x_sim=z_sim_cpu.numpy(),
-                x_train=task['knn_train_emb'],
-                y_train=task['knn_train_cts'],
-                x_test_final=task['target_emb'],
-                y_test_final=task['target_cts'],
-            )
-
-            all_results.append({
-                "task": task['name'],
-                "replicate": rep + 1,
-                "w2": w2,
-                "pearson_r": fb['pearson_r'],
-                "pearson_p": fb['pearson_p'],
-            })
-            last_fate_results[task['name']] = fb
-
-            log.info(f"  rep {rep+1:2d}/{args.n_sims}  W2={w2:.4f}  "
-                     f"pearson_r={fb['pearson_r']:.4f}")
-
-    # ── save results ──
-    df = pd.DataFrame(all_results)
-
-    # add summary rows per task
-    summary_rows = []
-    for task_name in df['task'].unique():
-        task_df = df[df['task'] == task_name]
-        summary_rows.append({
-            "task": task_name,
-            "replicate": "mean",
-            "w2": task_df['w2'].mean(),
-            "pearson_r": task_df['pearson_r'].mean(),
-            "pearson_p": task_df['pearson_p'].mean(),
-        })
-        summary_rows.append({
-            "task": task_name,
-            "replicate": "std",
-            "w2": task_df['w2'].std(),
-            "pearson_r": task_df['pearson_r'].std(),
-            "pearson_p": task_df['pearson_p'].std(),
-        })
-
-    df_summary = pd.concat([df, pd.DataFrame(summary_rows)], ignore_index=True)
-
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    df_summary.to_csv(output_path, index=False)
-    log.info(f"\nResults saved -> {output_path}")
-
-    # ── print summary ──
+    # ═══════════════════════════════════════════════════════════════════════
+    # EVALUATE (ODE — deterministic)
+    # ═══════════════════════════════════════════════════════════════════════
+    mode = "ode"
     log.info(f"\n{'='*60}")
-    log.info("Summary:")
-    for task_name in df['task'].unique():
-        task_df = df[df['task'] == task_name]
-        log.info(f"  {task_name}:")
-        log.info(f"    W2:        {task_df['w2'].mean():.4f} +/- {task_df['w2'].std():.4f}")
-        log.info(f"    Pearson r: {task_df['pearson_r'].mean():.4f} +/- {task_df['pearson_r'].std():.4f}")
+    log.info(f"Mode: {mode.upper()}")
 
-    # ── save fate fractions from last replicate of each task ──
-    fate_rows = []
-    for task in eval_tasks:
-        fb = last_fate_results.get(task['name'])
-        if fb is not None:
-            for ct in fb['cell_types']:
-                fate_rows.append({
-                    "task": task['name'],
-                    "cell_type": ct,
-                    "simulated_fraction": fb['simulated_fractions'][ct],
-                    "observed_fraction": fb['observed_fractions'][ct],
-                })
+    # ── Fate accuracy ──
+    sim_fn_fate = fate_eval.make_tigon_sim_fn(t_start=t_start_fate, t_end=t_end_fate)
 
-    if fate_rows:
-        fate_csv = output_path.replace(".csv", "_fate_fractions.csv")
-        df_fate = pd.DataFrame(fate_rows)
-        df_fate.to_csv(fate_csv, index=False)
-        log.info(f"Fate fractions -> {fate_csv}")
+    fate_result = fate_eval.run_fate_evaluation(
+        start_cells=start_cells_fate,
+        start_cell_ids=start_barcodes,
+        model=func,
+        simulation_func=sim_fn_fate,
+        F_obs=F_obs,
+        x_ref=x_ref, y_ref=y_ref,
+        n_sims=1,
+        k=args.k,
+        device=device,
+    )
+    log.info(f"  Fate accuracy: {fate_result['accuracy']:.4f}")
+    log.info(f"  Fate Pearson r: {fate_result['pearson_r']:.4f}")
+    fate_result['F_hat'].to_csv(os.path.join(output_dir, f"F_hat_{mode}.csv"))
 
+    # ── Population W2 ──
+    # Simulate tp4 → tp6 in standardized space, inverse-standardize for W2
+    t_start_w2 = float(norm_tps[1])
+    t_end_w2 = float(norm_tps[-1])
+    sim_fn_w2 = fate_eval.make_tigon_sim_fn(t_start=t_start_w2, t_end=t_end_w2)
+
+    w2_result = fate_eval.compute_w2_population(
+        src_cells=src_cells_w2,
+        target_cells=tgt_cells_w2,
+        model=func,
+        sim_fn=sim_fn_w2,
+        n_sims=1,
+        device=device,
+        scaler=scaler,
+    )
+    log.info(f"  W2 scaled: {w2_result['w2_scaled']:.4f}")
+    log.info(f"  W2 raw:    {w2_result['w2_raw']:.4f}")
+
+    # ── Per-clone W2 ──
+    df_clone_w2 = fate_eval.compute_w2_per_clone(
+        src_cells=src_cells_w2,
+        src_clone_ids=src_clones_w2,
+        target_cells=tgt_cells_w2,
+        target_clone_ids=tgt_clones_w2,
+        model=func,
+        sim_fn=sim_fn_w2,
+        n_sims=1,
+        device=device,
+        scaler=scaler,
+    )
+    df_clone_w2.to_csv(os.path.join(output_dir, f"w2_per_clone_{mode}.csv"), index=False)
+    log.info(f"  Per-clone W2: {len(df_clone_w2)} clones")
+
+    # ── Save combined CSV ──
+    df_combined = pd.DataFrame([{
+        "sim_mode": mode,
+        "accuracy": fate_result["accuracy"],
+        "pearson_r": fate_result["pearson_r"],
+        "w2_scaled": w2_result["w2_scaled"],
+        "w2_raw": w2_result["w2_raw"],
+        "n_start_cells": fate_result["n_start_cells"],
+        "n_sims_fate": 1,
+        "k": args.k,
+    }])
+    combined_path = os.path.join(output_dir, "eval_combined.csv")
+    df_combined.to_csv(combined_path, index=False)
+    log.info(f"\n{'='*60}")
+    log.info(f"Combined results → {combined_path}")
+    log.info(f"\n{df_combined.to_string(index=False)}")
     log.info("Done.")
 
 

@@ -47,20 +47,20 @@ log = logging.getLogger(__name__)
 # ── per-config hyperparameter presets ─────────────────────────────────────
 CONFIG_DEFAULTS = {
     "pca": dict(
-        layers=[64, 128, 64],
+        layers=[128, 128],
         activation="CELU",
         n_local_epochs=40,
-        n_epochs=40,
+        n_epochs=300,
         n_post_local_epochs=0,
         sample_size=100,
         lambda_density=20,
         criterion_name="ot",
     ),
     "dm": dict(
-        layers=[16, 32, 16],
+        layers=[128,128],
         activation="CELU",
         n_local_epochs=40,
-        n_epochs=40,
+        n_epochs=300,
         n_post_local_epochs=0,
         sample_size=100,
         lambda_density=20,
@@ -215,6 +215,11 @@ def main():
     plot_every = args.plot_every if args.plot_every > 0 else None
     log.info(f"\nStarting training: {hp['n_local_epochs']} local + {hp['n_epochs']} global + {hp['n_post_local_epochs']} post-local epochs")
 
+    # Workaround: MIOFlow's train() indexes ot_lambda_global with loop
+    # indices (0,1,2,...) but defaults to group-value keys ({2:1, 4:1, 6:1}).
+    # Pass index-keyed dict explicitly to avoid KeyError.
+    _ot_lambda = {i: 1.0 for i in range(len(groups))}
+
     start_time = time.time()
     local_losses, batch_losses, globe_losses = training_regimen(
         n_local_epochs=hp["n_local_epochs"],
@@ -231,6 +236,7 @@ def main():
         reverse_schema=False, reverse_n=2,
         plot_every=plot_every,
         n_points=1000, n_trajectories=100, n_bins=100,
+        ot_lambda_global=_ot_lambda,
     )
     run_time = time.time() - start_time
     log.info(f"Training complete in {run_time:.1f}s")
