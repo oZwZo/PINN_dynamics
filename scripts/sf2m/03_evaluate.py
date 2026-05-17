@@ -133,24 +133,37 @@ def main():
         log.warning(f"obsm_key '{obsm_key}' not in adata; falling back to '{fallback_key}'")
         obsm_key = fallback_key
 
-    # ── Load training-time scaler (the only valid inverse to raw PC space) ──
-    # Training (02_train.py) standardizes raw obsm[X_pca] with TRAIN-ONLY mean/std
-    # and saves them to scaler.npz. compute_scaler_from_adata would use full-pop
-    # stats, which is NOT the inverse of the training transform.
+    # ── Scaler for W2 inverse (raw-space recovery) ──
+    # The scaler is used by compute_w2_population to map endpoints back to
+    # raw obsm units via inverse_standardize(x, scaler) = x * std + mean.
+    #
+    # When obsm_key is *_scaled, the adata already stores pre-scaled data;
+    # the inverse scaler lives in adata.uns.
+    # When training used --standardize on raw obsm, scaler.npz holds train-only stats.
+    # When neither applies, scaler=None and w2_raw == w2_scaled.
+    used_standardize = bool(config.get("standardize", True))
+    scaler_path = os.path.join(args.model_dir, "scaler.npz")
+
     if obsm_key == "X_pca_scaled":
-        # need to recompute scaler on the fly
         scaler = adata.uns['PC_scaler']
-    elif not os.path.exists(os.path.join(args.model_dir, "scaler.npz")):
-        scaler_path = os.path.join(args.model_dir, "scaler.npz")
+    elif obsm_key == "DM_EigenVectors_scaled":
+        scaler = adata.uns['DM_scaler']
+    elif not used_standardize:
+        log.info("Training did not standardize (config.standardize=False); scaler=None")
+        scaler = None
+    elif not os.path.exists(scaler_path):
         log.warning(f"scaler.npz missing at {scaler_path} — w2_raw will collapse to w2_scaled")
         scaler = None
     else:
-        scaler_path = os.path.join(args.model_dir, "scaler.npz")
-        scaler = dict(np.load(os.path.join(args.model_dir, "scaler.npz")))
+        scaler = dict(np.load(scaler_path))
         log.info(f"Scaler: loaded train-only stats from {scaler_path}")
 
+    # ── Forward-transform start cells into model training space ──
+    # When obsm_key is *_scaled with standardize=false, adata data IS model space.
+    # When training used --standardize on raw obsm, we must apply (x-mean)/std.
     start_pre = np.asarray(start_adata.obsm[obsm_key][:, :n_dims])
-    if scaler is not None:
+    data_is_model_space = obsm_key.endswith("_scaled") and not used_standardize
+    if not data_is_model_space and scaler is not None:
         start_cells_fate = ((start_pre - scaler["mean"]) / scaler["std"]).astype(np.float32)
     else:
         start_cells_fate = start_pre.astype(np.float32)
