@@ -5,6 +5,7 @@
 
 set -u
 # PY="${PY:-/rds/user/wz369/hpc-work/LIBS/mamba/envs/PINN_env/bin/python}"
+# PY="singularity exec /rds/user/wz369/hpc-work/containers/pseudodynamics+_torch2.10.0+cu128_20260304.sif python"
 PY="${PY:-/local/scratch/wz369/PINN_env/bin/python}"
 PDP_DIR="${PDP_DIR:-/rds/user/wz369/hpc-work/pseudodynamics_plus}"
 EVAL_PY="${EVAL_PY:-/rds/user/wz369/hpc-work/PINN_dynamics/scripts/pseudodynamics+/03_eval_pdp_w2.py}"
@@ -91,26 +92,26 @@ run_evaluation() {
 # wait
 
 # DMscaled OT-assumption
-run_evaluation "logs/klein_DMscaled_10_cfm5_b512/pde_params_tsense/V0_config.json" &
-run_evaluation "logs/klein_DMscaled_10_cfm5_b1024/pde_params_tsense/V0_config.json" &
-wait
+# run_evaluation "logs/klein_DMscaled_10_cfm5_b512/pde_params_tsense/V0_config.json" &
+# run_evaluation "logs/klein_DMscaled_10_cfm5_b1024/pde_params_tsense/V0_config.json" &
+# wait
 
-run_evaluation "logs/klein_DMscaled_10_cfm10_b512/pde_params_tsense/V0_config.json" &
-run_evaluation "logs/klein_DMscaled_10_cfm10_b1024/pde_params_tsense/V0_config.json" &
-wait
+# run_evaluation "logs/klein_DMscaled_10_cfm10_b512/pde_params_tsense/V0_config.json" &
+# run_evaluation "logs/klein_DMscaled_10_cfm10_b1024/pde_params_tsense/V0_config.json" &
+# wait
 
 # === PC configs ===
 # No OT-assumption
-# run_evaluation "logs/klein_PC_30_lD1_lv1_lgNone/pde_params_tsense/V0_config.json" &
+run_evaluation "logs/klein_PC_30_lD1_lv1_lgNone/pde_params_tsense/V0_config.json" &
 
 # OT-assumption
-# run_evaluation "logs/klein_PC30_lD1_cfm1_lgNone/pde_params_tsense/V0_config.json" &
-# run_evaluation "logs/klein_PC30_lD1_cfm1_lv1_lgNone/pde_params_tsense/V0_config.json" &
-# wait
+run_evaluation "logs/klein_PC30_lD1_cfm1_lgNone/pde_params_tsense/V0_config.json" &
+run_evaluation "logs/klein_PC30_lD1_cfm1_lv1_lgNone/pde_params_tsense/V0_config.json" &
+wait
 
-# run_evaluation "logs/klein_PC30_lD1_cfm2_lgNone/pde_params_tsense/V0_config.json" &
-# run_evaluation "logs/klein_PC30_lD1_cfm10_lgNone/pde_params_tsense/V0_config.json" &
-# run_evaluation "logs/klein_PC30_lD1_cfm10_lgNone_b1024/pde_params_tsense/V0_config.json" &
-# wait
+run_evaluation "logs/klein_PC30_lD1_cfm2_lgNone/pde_params_tsense/V0_config.json" &
+run_evaluation "logs/klein_PC30_lD1_cfm10_lgNone/pde_params_tsense/V0_config.json" &
+run_evaluation "logs/klein_PC30_lD1_cfm10_lgNone_b1024/pde_params_tsense/V0_config.json" &
+wait
 
 echo "[ALL]    pdp+ sweep finished at $(date '+%F %T')"

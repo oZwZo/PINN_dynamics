@@ -5,8 +5,8 @@ import scanpy as sc
 import argparse
 import pseudodynamics as pdp
 
-os.chdir(pdp.main_dir)
-sys.path.append(os.path.join(pdp.main_dir, 'scripts'))
+os.chdir("/rds/user/wz369/hpc-work/pseudodynamics_plus")
+sys.path.append(os.path.join("/rds/user/wz369/hpc-work/pseudodynamics_plus", 'scripts'))
 import fate_eval_pipeline as fate_eval
 
 
@@ -24,6 +24,8 @@ p.add_argument("--noise_scale", default=1.0, type=float,
 p.add_argument("--n_sims", type=int, default=10,
                help="Simulated trajectories per start cell (default 10)")
 p.add_argument("--device", default="cuda:0")
+p.add_argument("--skip_per_clone", action="store_true",
+               help="Skip the 92-clone klein_w2_v2 step (population W2 only).")
 args = p.parse_args()
 
 
@@ -32,11 +34,18 @@ adata = sc.read_h5ad("data/klein_addpop.h5ad")
 clone_proportions = pd.read_csv("data/klein/clone_proportions.csv", index_col=0)
 
 config = pdp.ExperimentConfig(args.config_path)
-
+config.from_json(args.config_path, main_dir='/rds/user/wz369/hpc-work/pseudodynamics_plus/')
 # ── Compute scaler for unstandardized W2 ──
 cellstate_key = config.dataset_config.get("cellstate_key", None)
 n_dims = config.dataset_config['n_dimension']
-scaler = fate_eval.compute_scaler_from_adata(adata, cellstate_key, n_dims)
+
+
+if "pca" in cellstate_key:
+    scaler = adata.uns['PC_scaler']
+elif "DM" in cellstate_key:
+    scaler = adata.uns['DM_scaler']
+else:
+    scaler = None
 
 # build sim_fn
 if args.sim_fn == "ode":
@@ -66,7 +75,13 @@ print(f"W2 raw:    {w2_pop['w2_raw']:.6f}")
 # ── Save summary CSV ───────────────────────────────────────────────────
 output_path = args.output_path
 
-name = config.experiment_config['save_dir'].split("/")[-2]
+parts = config.experiment_config['save_dir'].rstrip('/').split('/')
+if 'logs' in parts:
+    logs_idx = parts.index('logs')
+    name_parts = parts[logs_idx + 1:-1]
+    name = "__".join(name_parts) if name_parts else parts[-2]
+else:
+    name = parts[-2]
 output_path = (f"results/pseudodynamics+/{name}/t{args.t_end_norm}_n{args.noise_scale}_{args.sim_fn}_w2_eval.csv"
                if output_path is None else output_path)
 os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -86,6 +101,10 @@ df_summary.to_csv(output_path, index=False)
 print(f"Summary → {output_path}")
 
 # ── Per-clone W2 (v2) ────────────────────────────────────────────────
+if args.skip_per_clone:
+    print("Skipping per-clone W2 (--skip_per_clone).")
+    sys.exit(0)
+
 df_clone_w2 = fate_eval.klein_w2_v2(test_ad, clone_proportions, config,
                                     args.device, sim_fn,
                                     n_sims=args.n_sims,
