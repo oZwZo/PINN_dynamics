@@ -116,7 +116,7 @@ if args.model == "pde_params":
     max_h = max(hidden_channels)
     model_kws = dict(v_channels = [n_dim] + hidden_channels + [args.n_dimension],
                     g_channels = [n_dim] + hidden_channels + [1],
-                    D_channels = [n_dim] + hidden_channels + [1],#[args.n_dimension]
+                    D_channels = [n_dim] + hidden_channels + [args.n_dimension]
                     )
     channels = [args.n_dimension + 1 ] + hidden_channels + [1]
 else:
