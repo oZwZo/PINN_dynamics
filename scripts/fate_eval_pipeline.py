@@ -241,6 +241,7 @@ def run_fate_evaluation(
     n_sims: int = 100,
     k: int = 20,
     device: str = "cpu",
+    knn: "KNeighborsClassifier | None" = None,
 ) -> dict:
     """
     End-to-end fate accuracy evaluation for any trajectory model.
@@ -307,10 +308,13 @@ def run_fate_evaluation(
         F_obs_aln  = F_obs.loc[ids_filt].reindex(columns=cell_types, fill_value=0.0)
     log.info(f"Start cells matched to F_obs: {len(cells_filt)}")
 
-    # ── KNN on reference data ─────────────────────────────────────────────
-    knn = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
-    knn.fit(x_ref, y_ref)
-    log.info(f"KNN fitted: {len(x_ref)} ref cells, k={k}")
+    # ── KNN on reference data (skip fit if caller passed a pre-fit knn) ───
+    if knn is None:
+        knn = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
+        knn.fit(x_ref, y_ref)
+        log.info(f"KNN fitted: {len(x_ref)} ref cells, k={k}")
+    else:
+        log.info(f"KNN reused (pre-fit, k={knn.n_neighbors})")
 
     # ── Predict F_hat ─────────────────────────────────────────────────────
     F_hat_arr = predict_fates_per_cell(

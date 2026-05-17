@@ -92,7 +92,13 @@ def simulate_mf(mf, start_barcodes, start_time, end_time, adata,
     with torch.no_grad():
         X_ts = torch.tensor(normed, dtype=torch.float32, device=device)
         traj = odeint(mf.ode_model.to(device), X_ts, t_bins)
-        decoded = mf.gaga_autoencoder.to(device).decode(traj[-1])
+        # Inverse the (emb - mean)/std applied at line 88 before decoding;
+        # the GAGA decoder was trained on un-normalized latent (mioflow.py:328
+        # canonical generate path applies *std + mean before decode).
+        std_t = torch.tensor(mf.std_vals, dtype=torch.float32, device=device)
+        mean_t = torch.tensor(mf.mean_vals, dtype=torch.float32, device=device)
+        traj_last_unnormed = traj[-1] * std_t + mean_t
+        decoded = mf.gaga_autoencoder.to(device).decode(traj_last_unnormed)
 
     decoded_np = decoded.cpu().numpy()
     mf.gaga_autoencoder.cpu()
