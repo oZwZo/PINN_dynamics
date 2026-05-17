@@ -104,8 +104,11 @@ def parse_args():
     p.add_argument(
         "--obsm_key",
         default="X_pca",
-        choices=["X_pca", "DM_EigenVectors"],
-        help="obsm key to use as cell embedding (default: X_pca)",
+        choices=["X_pca", "X_pca_scaled", "DM_EigenVectors", "DM_EigenVectors_scaled"],
+        help="obsm key to use as cell embedding (default: X_pca). For DM, use "
+             "'DM_EigenVectors_scaled' so the SDE noise scale matches the data; "
+             "the raw 'DM_EigenVectors' has std≈0.0025 which is drowned by "
+             "train_sd=0.5.",
     )
     p.add_argument(
         "--n_dims",

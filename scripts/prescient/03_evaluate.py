@@ -47,8 +47,11 @@ def parse_args():
     p.add_argument("--clone_proportions", default="data/klein/clone_proportions.csv",
                    help="Clone proportions CSV")
     p.add_argument("--obsm_key", default="X_pca",
-                   choices=["X_pca", "DM_EigenVectors"],
-                   help="obsm key used during training")
+                   choices=["X_pca", "X_pca_scaled",
+                            "DM_EigenVectors", "DM_EigenVectors_scaled"],
+                   help="obsm key used during training. *_scaled keys imply the "
+                        "model lives in z-scored space; the evaluator pulls the "
+                        "matching scaler from adata.uns to inverse to raw units.")
     p.add_argument("--n_dims", type=int, default=30,
                    help="Embedding dimensions")
     p.add_argument("--tp_col", default="timepoint_tx_days")
@@ -60,8 +63,16 @@ def parse_args():
                    help="Trajectories per cell for W2")
     p.add_argument("--k", type=int, default=15, help="KNN neighbors")
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--sim_sd", type=float, default=None,
+                   help="Override config.train_sd at simulation time (no retraining). "
+                        "Reduces SDE noise to inspect the W2-vs-fate trade-off — useful "
+                        "when the model has high Pearson r / fate accuracy but inflated "
+                        "W2 due to a noisy sim cloud. Default None keeps config.train_sd. "
+                        "If set and --output_dir is not provided, results land in "
+                        "<model_dir>/eval_sim_sd_<value>/ so the default eval is preserved.")
     p.add_argument("--output_dir", default=None,
-                   help="Output directory (default: model_dir/)")
+                   help="Output directory (default: model_dir/, or "
+                        "model_dir/eval_sim_sd_<value>/ when --sim_sd is set)")
     return p.parse_args()
 
 
@@ -71,7 +82,12 @@ def main():
     device = args.device if (args.device == "cpu" or torch.cuda.is_available()) else "cpu"
     log.info(f"Device: {device}")
 
-    output_dir = args.output_dir or args.model_dir
+    if args.output_dir is not None:
+        output_dir = args.output_dir
+    elif args.sim_sd is not None:
+        output_dir = os.path.join(args.model_dir, f"eval_sim_sd_{args.sim_sd}")
+    else:
+        output_dir = args.model_dir
     os.makedirs(output_dir, exist_ok=True)
 
     # ── Load model ──
@@ -84,6 +100,13 @@ def main():
             raise FileNotFoundError(f"Required file not found: {p_path}")
 
     config = SimpleNamespace(**torch.load(config_path, weights_only=False))
+    if args.sim_sd is not None:
+        log.info(
+            f"Override sim noise: config.train_sd {config.train_sd} → {args.sim_sd} "
+            f"(eval-time only; weights unchanged). fate_eval_pipeline.py reads "
+            f"config.train_sd live each SDE step, so this takes effect immediately."
+        )
+        config.train_sd = args.sim_sd
     net = AutoGenerator(config)
     checkpoint = torch.load(train_pt, map_location=device, weights_only=False)
     net.load_state_dict(checkpoint["model_state_dict"])
@@ -108,8 +131,26 @@ def main():
     tp_last = tp_values[2]    # day 6
     log.info(f"Timepoints: {tp_values}")
 
-    # No scaler for PRESCIENT (operates in raw obsm space)
-    scaler = None
+    # Scaler convention: when training on a *_scaled obsm key, the data was already
+    # z-scored upstream and the inverse lives in adata.uns. Pulling it from there
+    # mirrors the SF2M/X_pca_scaled pattern. Raw obsm keys → no scaler (model lives
+    # in raw space; w2_raw == w2_scaled).
+    if args.obsm_key == "X_pca_scaled":
+        scaler = adata.uns["PC_scaler"]
+        log.info("Scaler: adata.uns['PC_scaler']")
+    elif args.obsm_key == "DM_EigenVectors_scaled":
+        scaler = adata.uns["DM_scaler"]
+        log.info("Scaler: adata.uns['DM_scaler']")
+    else:
+        scaler = None
+        if args.obsm_key == "DM_EigenVectors":
+            log.warning(
+                "obsm_key='DM_EigenVectors' (raw). Default train_sd=0.5 swamps "
+                "DM raw std (≈0.0025), so this model likely failed to learn. "
+                "Re-prepare with --obsm_key DM_EigenVectors_scaled and retrain."
+            )
+        else:
+            log.info("Scaler: none → assuming model trained on raw obsm")
 
     # ── Prepare fate eval data ──
     # Start cells: cells at first timepoint that are in F_obs
@@ -118,10 +159,13 @@ def main():
     tp_start_mask = (adata.obs[args.tp_col] == tp_first).values
     start_mask = valid_mask & tp_start_mask
 
+    # When obsm_key is *_scaled, adata.obsm[obsm_key] is already z-scored and matches
+    # the model's input distribution; no forward-scaling needed. The scaler above is
+    # used only by compute_w2_population to inverse endpoints back to raw units.
     start_cells_fate = adata[start_mask].obsm[args.obsm_key][:, :args.n_dims].astype(np.float32)
     start_cell_ids = list(adata[start_mask].obs_names.astype(str))
 
-    # KNN reference: training cells
+    # KNN reference: training cells in the same coord system as the model
     x_ref = adata[train_mask].obsm[args.obsm_key][:, :args.n_dims].astype(np.float32)
     y_ref = adata[train_mask].obs[args.celltype_col].values.astype(str)
 
