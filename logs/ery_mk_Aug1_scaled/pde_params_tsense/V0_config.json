@@ -4,9 +4,9 @@
         "dataset": "ery_mk_Aug1",
         "gpu_devices": 7,
         "progress_bar": "True",
-        "save_dir": "/ssd/users/Wergillius/Project/PINN_dynamics/logs/ery_mk_Aug1_scaled/pde_params_tsense",
+        "save_dir": "/home/wz369/rds/hpc-work/PINN_dynamics/logs/ery_mk_Aug1_scaled/pde_params_tsense",
         "version": 0,
-        "checkpoint_dir": "/ssd/users/Wergillius/Project/PINN_dynamics/logs/ery_mk_Aug1_scaled/pde_params_tsense/lightning_logs/version_0"
+        "checkpoint_dir": "/home/wz369/rds/hpc-work/PINN_dynamics/logs/ery_mk_Aug1_scaled/pde_params_tsense/lightning_logs/version_0"
     },
     "dataset_config": {
         "cellstate_key": "DM_EigenVectors_scaled",

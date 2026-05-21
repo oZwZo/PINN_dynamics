@@ -83,11 +83,42 @@ class pde_params_base(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
+        # optimizer = torch.optim.Adam(
+        optimizer = torch.optim.RMSprop(
             # [module.parameters() for module in  [self.g, self.v, self.D]],
             self.parameters(),
                 lr=self.lr)
         return optimizer
+    
+    # def configure_optimizers(self):
+    #     lr = self.lr
+    #     if self.optim_class == 'LBFGS':
+    #         optimizer = torch.optim.LBFGS(self.parameters(), lr=lr, max_iter=20,
+    #                                       max_eval=None, tolerance_grad=1e-07, tolerance_change=1e-09)
+    #     elif self.optim_class == 'RMSprop':
+    #         optimizer = torch.optim.RMSprop(self.parameters(), lr=lr)
+    #     else:
+    #         # i.e. Adam              
+    #         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        
+    #     if self.schedule_lr != "False":
+    #         # so we can pass string
+    #         if isinstance(self.schedule_lr, Callable):
+    #             self.scheduler = self.schedule_lr(optimizer)
+
+    #         else:
+    #             self.scheduler = torch.optim.lr_scheduler.StepLR(
+    #                 optimizer, step_size  = 10 , gamma = 0.1)
+                
+    #         return {
+    #             "optimizer": optimizer,
+    #             "lr_scheduler" : {
+    #                 "scheduler" : self.scheduler,
+    #                 "monitor" : "total_loss",
+    #                 }
+    #             }
+    #     else:
+    #         return optimizer
 
     def trace_div(self, f, s):
         """
@@ -552,7 +583,10 @@ class pde_params(pde_params_base):
             log_u_pred = self.u(s,t)
 
         # boundary u of the current timepoint
-        log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
+        if self.log_transform:
+            log_density_loss_t = self.loss_fn(ut, log_u_pred)    # the input u is in log scale
+        else:
+            log_density_loss_t = self.loss_fn(torch.log(ut+1e-10), log_u_pred)
 
         return log_density_loss_t
 
@@ -601,7 +635,7 @@ class pde_params(pde_params_base):
             dudt, growth, drift, diffuse = self.equation(s, t)
             rhs = growth + drift + diffuse
 
-        return self.loss_fn(rhs.squeeze(), dudt.squeeze())
+        return torch.mean((rhs.squeeze() - dudt.squeeze())**2)
         # return self.loss_fn(torch.log(rhs.squeeze()+1e-10), torch.log(dudt.squeeze()+1e-10))
 
 
@@ -622,8 +656,10 @@ class pde_params(pde_params_base):
         
         # loss 2 : dynamics 
         u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1, ut)
-
-        log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
+        if self.log_transform:
+            log_sim_loss_tp1 = self.loss_fn(utp1+1e-10, u_int[-1]+1e-10) 
+        else:
+            log_sim_loss_tp1 = self.loss_fn(torch.log(utp1+1e-10), torch.log(u_int[-1]+1e-10)) 
 
 
         # loss 3 : constrain related loss 
@@ -631,20 +667,14 @@ class pde_params(pde_params_base):
         D_norm = self.restrict_D(s, t, exp=False)    # constrain D 
         v_loss = self.constrain_v(s,t,deltax)        # constrain v by local velocity   
         
-        # duds_loss = -1 * nn.functional.cosine_similarity(duds[-1], duds_tp1)
-        # constrain g by population size
-        if self.log_transform:
-            left = torch.exp(utp1).sum()
-            right = torch.exp(ut + growth[-1]).sum()
-            growth_loss = self.loss_fn(torch.log(left), torch.log(right))
-        else:
-            mass_gain = utp1.sum() -  ut.sum()
-            predicted_gain = growth[-1].sum()
-            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
+        left = torch.exp(utp1).sum()
+        right = torch.exp(ut + growth[-1]).sum()
+        growth_loss = self.loss_fn(torch.log(left), torch.log(right))
         
 
         total_loss = log_density_loss_t + log_density_loss_tp1 + \
                     2 * log_sim_loss_tp1 + \
+                    R_loss +\
                     self.D_penalty * D_norm + \
                     self.deltax_weight * v_loss + \
                     self.growth_weight * growth_loss
@@ -847,13 +877,14 @@ class pde_params_fastmode(pde_params):
         return total_loss
     
 class log_pde_params(pde_params):
-    def __init__(self, channels, growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
+    def __init__(self, channels, equation = 'log_equation', growth_weight=None, collapse_D = True, collapse_v = False, g_channels=None, v_channels=None, D_channels=None, time_sensitive=True, lr=3e-4, ode_tol=1e-4, activation_fn:Union[str, list] = 'Tanh', deltax_weight = None, D_penalty = None, weight_intensity=None, time_scale_factor=None, pop_weight=None):
         r"""
         mlp u theta
         
         Arguments:
         -------------
         channel : the number of MLP channels of the Behavior function
+        equation : 'log_equation', 'log_simplified_equation', 'log_TIGON_equation'
         [g, v, D]_channel : the number of MLP channels of the Behavior function
         collapse_[D,v] : merge the multi-channel output into 1 channel, 
                          which controls the complexity of the pde term.
@@ -871,7 +902,11 @@ class log_pde_params(pde_params):
         self.save_hyperparameters()
         self.log_transform = True
 
-    def equation(self, s, t) -> tuple:
+        self.equation = eval(f"self.{equation}")
+
+
+
+    def log_equation(self, s, t) -> tuple:
         """
         the log Reaction-Advection Diffusion equation
         """
@@ -897,9 +932,119 @@ class log_pde_params(pde_params):
         # drift : ∇v + (∇logu·v) 
         drift = dvds.sum(dim=1) + self.mul(dloguds, v)
         growth = g
-        
-        return None, growth, drift, diffusion
 
+        dlogudt = self.gradient_of(logu.sum(), t)
+        
+        return dlogudt, growth, drift, diffusion
+    
+    def log_simplified_equation(self, s, t) -> tuple:
+        """
+        Simplified log PDE  without Diffusion
+        """
+        logu = self.u(s,t)
+        v = self.v(s,t)
+        g = self.g(s,t)
+
+        # first-order derivative
+        dloguds = self.gradient_of(logu.sum(), s)
+        dvds = self.gradient_of(v.sum(), s)
+    
+        # drift : ∇v + (∇logu·v) 
+        drift = dvds.sum(dim=1) + self.mul(dloguds, v)
+        growth = g
+
+        dlogudt = self.gradient_of(logu.sum(), t)
+        
+        diffusion = torch.zeros_like(drift)
+
+        return dlogudt, growth, drift, diffusion
+    
+    def log_TIGON_equation(self, s, t) -> tuple:
+        """
+        Apply torch's auto grad to compute the 
+        
+        based on the following equation:
+            ∂log(u)/∂t = g - ∇ v 
+        
+        we calcuate the left hand side (lhs) and the right hand side
+        """
+        u = self.u(s,t)
+        # D = self.D(s,t)   # we wouldn't bother not having D
+        v = self.v(s,t)
+        g = self.g(s,t) # d- dim
+
+        u = torch.clamp(u, min=1e-10)
+
+        if len(g.shape) > 1:
+            g = g.mean(dim=1)
+
+        dlnu_dt = torch.autograd.grad(torch.log(u).sum(), t, create_graph=True)[0]
+
+        
+        drift = self.trace_div(v, s)
+
+        growth = g 
+        diffusion = torch.zeros_like(drift)
+        
+        return dlnu_dt, growth, drift, diffusion
+    
+
+    def training_step(self, train_batch, index):
+        
+        # cellstate, t, t+1, u_t, u_{t+1}
+        s = train_batch['s']
+        t = train_batch['t']
+        tp1 =train_batch['tp1'] 
+        ut = train_batch['ut']
+        utp1 = train_batch['utp1']
+        deltax = train_batch['deltax']
+
+        # loss 1 : boundary loss
+        log_density_loss_t = self.forward_density_loss(s, t, ut)
+        log_density_loss_tp1 = self.forward_density_loss(s, tp1, utp1)
+
+        
+        # loss 2 : dynamics 
+        u_int, s_t, duds, growth, drift, diffuse = self.forward_simulation(s, t, tp1, ut)
+
+        log_sim_loss_tp1 = self.loss_fn(utp1+1e-10, u_int[-1]+1e-10) 
+        
+
+        # loss 3 : constrain related loss 
+        R_loss = self.residual_loss(s, t)
+        D_norm = self.restrict_D(s, t, exp=False)    # constrain D 
+        v_loss = self.constrain_v(s,t,deltax)        # constrain v by local velocity   
+        
+        # duds_loss = -1 * nn.functional.cosine_similarity(duds[-1], duds_tp1)
+        # constrain g by population size
+        if self.log_transform:
+            left = torch.exp(utp1).sum()
+            right = torch.exp(ut + growth[-1]).sum()
+            growth_loss = self.loss_fn(torch.log(left), torch.log(right))
+        else:
+            mass_gain = utp1.sum() -  ut.sum()
+            predicted_gain = growth[-1].sum()
+            growth_loss = self.loss_fn(mass_gain, predicted_gain, weight=2) / mass_gain
+        
+
+        total_loss = log_density_loss_t + log_density_loss_tp1 + \
+                    2 * log_sim_loss_tp1 + \
+                    R_loss +\
+                    self.D_penalty * D_norm + \
+                    self.deltax_weight * v_loss + \
+                    self.growth_weight * growth_loss
+
+
+        with torch.no_grad():
+            # self.log("residual_loss", Loss_r, on_epoch=True)
+            # self.log("boundary_loss", Loss_b, on_epoch=True)
+            self.log("population_loss", growth_loss.item(), on_epoch=True)
+            self.log("boundary_loss",  log_density_loss_t.item(),  on_epoch=True)
+            self.log("residual loss", R_loss.item(), on_epoch=True)
+            self.log("integrat_loss", log_sim_loss_tp1.item(), on_epoch=True)
+            self.log("total_loss", total_loss, on_epoch=True, prog_bar=True)
+
+        return total_loss
 
 
 class pde_u_free(pde_params):

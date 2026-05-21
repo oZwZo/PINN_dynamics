@@ -1,0 +1,22 @@
+name: scarches
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pip:
+    # The following installs PyTorch, torchaudio, and torchvision with CUDA 12.8 support.
+    # Make sure your system has CUDA 12.8 installed and compatible hardware.
+    # For CPU-only installation, comment out the lines below and uncomment the CPU-only alternatives.
+    - torch --extra-index-url https://download.pytorch.org/whl/cu128
+    - torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+    - torchvision --extra-index-url https://download.pytorch.org/whl/cu128
+    # CPU-only alternatives:
+    # - torch
+    # - torchaudio
+    # - torchvision
+    - scvi-tools
+    - scarches
+variables:
+  SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL: True

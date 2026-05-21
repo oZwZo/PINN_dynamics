@@ -438,7 +438,7 @@ def sample_deltax(adata,transition_matrix=None, max_degree=1, k=None, xkey=None,
     return delta_X, neighbor_ls
         
 
-def sample_deltax_from_transition(adata, transition_matrix,xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False):
+def sample_deltax_from_transition(adata,transition_matrix, n_repeat=10,  xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False):
     r"""
     the Key function defines the delta-X sampling process 
     given the transition matrix, then sample the delta x
@@ -494,7 +494,7 @@ def sample_deltax_from_transition(adata, transition_matrix,xkey=None, pseudotime
     return np.stack(delta_X), np.array(neighbor_ls)
 
 
-def sample_deltax_from_knn(adata, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False, temperature=1):
+def sample_deltax_from_knn(adata, n_repeat=10, max_degree=1, k=None, xkey=None, pseudotimekey='palantir_pseudotime', progressbar=False, temperature=1):
     """
     the Key function defines the noise sampling process 
     given the starting point i
@@ -578,9 +578,15 @@ def sample_deltax_from_knn(adata, max_degree=1, k=None, xkey=None, pseudotimekey
             knn_p = connectivities[i,final_index].A.flatten()**temperature
             p = knn_p / knn_p.sum() if knn_p.sum() != 0 else None
 
-            neighbor_idx = np.random.choice(final_index, p=p)
+            neighbor_idx = np.random.choice(final_index, p=p, size=(n_repeat,))
 
-        delta_X.append( X[neighbor_idx] - X[i] )
+            delta_xs = X[neighbor_idx] - X[i]
+
+            ndim = X.shape[1]
+            if len(neighbor_idx) != n_repeat:
+                delta_xs = np.broadcast_to(delta_xs, shape=(n_repeat, ndim))
+            
+        delta_X.append( delta_xs )
         neighbor_ls.append(neighbor_idx)
 
     return delta_X, neighbor_ls
@@ -625,9 +631,12 @@ def make_coord_adata(adata, cellstate_key, n_dimension, v = None):
     new_ad.obsp['connectivities'] = adata.obsp['connectivities'].copy()
     new_ad.obsp['distances'] = adata.obsp['distances'].copy()
     new_ad.layers['cellstate'] = new_ad.X.copy()
-    new_ad.obsm["X_pca"] = adata.obsm["X_pca"]
-    new_ad.obsm["X_pca_harmony"] = adata.obsm["X_pca_harmony"]
-    new_ad.obsm["X_umap"] = adata.obsm["X_umap"]
+
+    for key in adata.obsm_keys():
+        # if key.startswith('X_'):
+        #     new_ad.obsm[key] = adata.obsm[key].copy()
+        new_ad.obsm[key] = adata.obsm[key]
+
     
     # pop info
     new_ad.uns = adata.uns.copy()

@@ -1,20 +1,32 @@
 """
 PRESCIENT Training Script
 ==========================
+<<<<<<< HEAD
 Wraps `prescient train_model` CLI with sensible defaults for the PCA and DM configs.
+=======
+Wraps PRESCIENT train_model with sensible defaults for the PCA and DM configs.
+Calls PRESCIENT as a Python import (not subprocess) so that torch.load/save
+monkey-patches for PyTorch >= 2.6 compatibility take effect.
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 
 Usage
 -----
 # PCA config (30-dim, k_dim=500, layers=1)
 python scripts/prescient/02_train.py \
+<<<<<<< HEAD
     --data_path logs/PRESCIENT/pca_run/train_expr_data.pt \
     --out_dir   logs/PRESCIENT/pca_run/ \
+=======
+    --data_path results/PRESCIENT/pca_run/data.pt \
+    --out_dir   results/PRESCIENT/pca_run/ \
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     --config    pca \
     --seed      2 \
     --gpu       0
 
 # DM config (10-dim, k_dim=64, layers=4)
 python scripts/prescient/02_train.py \
+<<<<<<< HEAD
     --data_path logs/PRESCIENT/dm_run/train_expr_data.pt \
     --out_dir   logs/PRESCIENT/dm_run/ \
     --config    dm \
@@ -29,13 +41,42 @@ CLI reference: https://cgs.csail.mit.edu/prescient/documentation/
       [--train_dt 0.1] [--train_sd 0.5] [--train_tau 1e-6]
       [--train_batch 0.1] [--train_clip 0.25] [--save 100]
       [--seed 1] [--gpu GPU_INT]
+=======
+    --data_path results/PRESCIENT/dm_run/data.pt \
+    --out_dir   results/PRESCIENT/dm_run/ \
+    --config    dm \
+    --seed      2 \
+    --gpu       0
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 """
 
 import os
 import argparse
+<<<<<<< HEAD
 import subprocess
 import logging
 
+=======
+import logging
+
+import torch
+
+# ── PyTorch >= 2.6 compat ────────────────────────────────────────────────
+# PRESCIENT internally uses torch.load() / torch.save() without the flags
+# needed for PyTorch >= 2.6.  Monkey-patch BEFORE importing prescient.
+_original_torch_load = torch.load
+def _patched_torch_load(f, *args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _original_torch_load(f, *args, **kwargs)
+torch.load = _patched_torch_load
+
+_original_torch_save = torch.save
+def _patched_torch_save(obj, f, *args, **kwargs):
+    kwargs.setdefault("pickle_protocol", 4)
+    return _original_torch_save(obj, f, *args, **kwargs)
+torch.save = _patched_torch_save
+
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
@@ -48,7 +89,10 @@ CONFIG_DEFAULTS = {
 # ── shared hyperparameters (same for both configs) ─────────────────────────
 SHARED_DEFAULTS = dict(
     loss="euclidean",
+<<<<<<< HEAD
     pretrain_lr=1e-9,
+=======
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     pretrain_epochs=500,
     train_epochs=2500,
     train_lr=0.01,
@@ -63,7 +107,11 @@ SHARED_DEFAULTS = dict(
 
 def parse_args():
     p = argparse.ArgumentParser(
+<<<<<<< HEAD
         description="Train a PRESCIENT model by calling prescient train_model CLI"
+=======
+        description="Train a PRESCIENT model (calls prescient.commands.train_model in-process)"
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     )
     p.add_argument(
         "--data_path",
@@ -83,7 +131,11 @@ def parse_args():
     )
     p.add_argument(
         "--weight_name",
+<<<<<<< HEAD
         default=None,
+=======
+        default="growth_weights",
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
         help="Descriptive weight name used in output directory name (default: derived from --config)",
     )
     # Network architecture (override preset)
@@ -91,13 +143,19 @@ def parse_args():
     p.add_argument("--layers", type=int, default=None, help="Network depth (default: 1 for pca, 4 for dm)")
     p.add_argument("--activation", default=None, help="Activation function (default: softplus)")
     # Training hyperparams (override shared defaults)
+<<<<<<< HEAD
     p.add_argument("--distance_fn", default="euclidean", help="Distance function (default: euclidean)")
+=======
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     p.add_argument("--train_tau",        type=float, default=None, help="Tau (default: 1e-6)")
     p.add_argument("--train_dt",         type=float, default=None, help="Simulation timestep (default: 0.1)")
     p.add_argument("--train_sd",         type=float, default=None, help="Gaussian noise std dev (default: 0.5)")
     p.add_argument("--pretrain_epochs",  type=int,   default=None, help="Pre-train epochs (default: 500)")
     p.add_argument("--train_epochs",     type=int,   default=None, help="Training epochs (default: 2500)")
+<<<<<<< HEAD
     p.add_argument("--pretrain_lr",      type=float, default=None, help="Pre-train learning rate (default: 1e-9)")
+=======
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     p.add_argument("--train_lr",         type=float, default=None, help="Training learning rate (default: 0.01)")
     p.add_argument("--train_batch",      type=float, default=None, help="Batch size fraction (default: 0.1)")
     p.add_argument("--train_clip",       type=float, default=None, help="Gradient clip threshold (default: 0.25)")
@@ -127,7 +185,10 @@ def main():
     if args.train_sd     is not None: hp["train_sd"]        = args.train_sd
     if args.pretrain_epochs is not None: hp["pretrain_epochs"] = args.pretrain_epochs
     if args.train_epochs is not None: hp["train_epochs"]    = args.train_epochs
+<<<<<<< HEAD
     if args.pretrain_lr  is not None: hp["pretrain_lr"]     = args.pretrain_lr
+=======
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     if args.train_lr     is not None: hp["train_lr"]        = args.train_lr
     if args.train_batch  is not None: hp["train_batch"]     = args.train_batch
     if args.train_clip   is not None: hp["train_clip"]      = args.train_clip
@@ -150,6 +211,7 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
+<<<<<<< HEAD
     # ── build CLI command ─────────────────────────────────────────────────
     # prescient train_model -i DATA --out_dir DIR --weight_name NAME [OPTIONS]
     cmd = [
@@ -176,16 +238,56 @@ def main():
     if args.gpu is not None:
         cmd += ["--gpu", str(args.gpu)]
 
+=======
+    # ── log resolved hyperparameters ─────────────────────────────────────
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     log.info("Hyperparameters resolved:")
     for k, v in hp.items():
         log.info(f"  {k} = {v}")
     log.info(f"weight_name = {weight_name}")
     log.info(f"seed        = {args.seed}")
     log.info(f"gpu         = {args.gpu}")
+<<<<<<< HEAD
     log.info(f"\nRunning: {' '.join(cmd)}")
 
     # ── run training ──────────────────────────────────────────────────────
     result = subprocess.run(cmd, check=True)
+=======
+
+    # ── build PRESCIENT args namespace ───────────────────────────────────
+    # Call PRESCIENT as a Python import (not subprocess) so torch.load/save
+    # monkey-patches take effect throughout training.
+    from argparse import Namespace
+    from prescient.commands.train_model import main as prescient_train, train_init
+
+    prescient_args = Namespace(
+        data_path=args.data_path,
+        out_dir=args.out_dir,
+        weight_name=weight_name,
+        activation=str(hp["activation"]),
+        k_dim=int(hp["k_dim"]),
+        layers=int(hp["layers"]),
+        loss=str(hp.get("loss", "euclidean")),
+        pretrain_epochs=int(hp["pretrain_epochs"]),
+        train_epochs=int(hp["train_epochs"]),
+        train_lr=float(hp["train_lr"]),
+        train_dt=float(hp["train_dt"]),
+        train_sd=float(hp["train_sd"]),
+        train_tau=float(hp["train_tau"]),
+        train_batch=float(hp["train_batch"]),
+        train_clip=float(hp["train_clip"]),
+        save=int(hp["save"]),
+        seed=args.seed,
+        gpu=args.gpu if args.gpu is not None else 7,
+        no_cuda=False,
+        pretrain=True,
+        train=True,
+        config=None,
+    )
+
+    log.info(f"\nCalling prescient.commands.train_model.main() in-process ...")
+    prescient_train(prescient_args)
+>>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 
     # ── report expected output location ───────────────────────────────────
     # PRESCIENT saves to: out_dir/weight_name-activation_layers_kdim-tau/seed_SEED/

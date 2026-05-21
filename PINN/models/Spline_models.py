@@ -69,7 +69,10 @@ class CubicSpline(nn.Module):
 
         # assign segment
         idxs = torch.searchsorted(self.x[1:], xs)
-        dx = (self.x[idxs + 1] - self.x[idxs])
+        try:
+            dx = (self.x[idxs + 1] - self.x[idxs])
+        except:
+            dx = torch.diff(self.x)[0]
         hh = self.h_poly((xs - self.x[idxs]) / dx)
 
         # the main function doing the calculation

@@ -29,3 +29,26 @@ Explore_Notebook/density/denmarf_pickle
 test.ipynb
 testing.ipynb
 data/combined_sample.meta.csv
+
+# Local Claude Code state — per-machine, not for sharing
+.claude/
+
+# Session-local planning files (Manus-style)
+task_plan.md
+findings.md
+progress.md
+
+# Slurm/Jupyter job runtime artifacts
+jupyter-cpu-log-*.txt
+machine.file.*
+
+# Stray top-level run dir (mirrors logs/ery_mk_Aug1_scaled/)
+/ery_mk_Aug1_scaled/
+
+# Heavy binary artifacts (containers, archives, h5ad snapshots)
+*.sif
+*.tar.gz
+Explore_Notebook/1.explore_datasets/*.h5ad
+
+# Notebook backup copies (e.g., "X-Copy1.ipynb")
+*-Copy[0-9]*.ipynb
