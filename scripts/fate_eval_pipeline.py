@@ -912,14 +912,22 @@ def compute_scaler_from_adata(adata, scaled_key, n_dims):
     """
     Compute scaler (mean, std) from adata by inferring the unscaled key.
 
-    For pseudodynamics+, the adata contains both 'X_pca_scaled' and 'X_pca'
-    (or 'DM_EigenVectors_scaled' and 'DM_EigenVectors').  The scaler is
-    computed as mean/std of the unscaled version over ALL cells.
+    Two paths:
+
+    1. **Pre-computed scaler in `.uns`** (cord blood pattern). If
+       `adata.uns['pca_scaler']` or `adata.uns['dm_scaler']` is present, return
+       those mean/std values truncated to `n_dims`. This avoids re-fitting on
+       the full dataset (which would leak test-set statistics into the scaler).
+
+    2. **On-the-fly fit** (Klein pattern). Otherwise compute mean/std over
+       ALL cells in the unscaled obsm key — backward-compatible with the
+       legacy behaviour.
 
     Parameters
     ----------
     adata      : AnnData — FULL adata (not just test subset).
-    scaled_key : str — e.g. 'X_pca_scaled', 'DM_EigenVectors_scaled'.
+    scaled_key : str — e.g. 'X_pca_scaled', 'X_pca_harmony_scaled',
+                 'DM_EigenVectors_scaled'.
     n_dims     : int
 
     Returns
@@ -929,6 +937,30 @@ def compute_scaler_from_adata(adata, scaled_key, n_dims):
     """
     if not scaled_key.endswith('_scaled'):
         return None
+
+    # Path 1 — pre-computed scaler in .uns (cord blood)
+    if scaled_key in ('X_pca_scaled', 'X_pca_harmony_scaled'):
+        uns_key = 'pca_scaler'
+    elif scaled_key == 'DM_EigenVectors_scaled':
+        uns_key = 'dm_scaler'
+    else:
+        uns_key = None
+    if uns_key is not None and uns_key in adata.uns:
+        s = adata.uns[uns_key]
+        mean_arr = np.asarray(s['mean'])
+        std_arr = np.asarray(s['std'])
+        if mean_arr.shape[0] < n_dims or std_arr.shape[0] < n_dims:
+            raise ValueError(
+                f"adata.uns['{uns_key}'] has only {mean_arr.shape[0]} dims, "
+                f"but n_dims={n_dims} requested. Re-run preprocessing with "
+                f"the higher n_dims or pass --n_dims {mean_arr.shape[0]}."
+            )
+        return {
+            'mean': mean_arr[:n_dims],
+            'std':  std_arr[:n_dims],
+        }
+
+    # Path 2 — on-the-fly fit (Klein, backward-compatible)
     raw_key = scaled_key.replace('_scaled', '')
     if raw_key not in adata.obsm:
         raise KeyError(

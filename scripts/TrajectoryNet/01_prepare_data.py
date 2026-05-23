@@ -58,6 +58,9 @@ def parse_args():
                    help="Well column for train/test split (default: Well)")
     p.add_argument("--celltype_col", default="label_man",
                    help="Cell-type annotation column (default: label_man)")
+    p.add_argument("--dataset_name", default="klein_train",
+                   help="NPZ output stem (default 'klein_train' for backwards compat; "
+                        "cord blood passes 'cordblood').")
     p.add_argument("--seed", type=int, default=42,
                    help="Random seed (default: 42)")
     return p.parse_args()
@@ -136,7 +139,8 @@ def main():
 
     # ── build TrajectoryNet NPZ ──
     # TrajectoryNet CustomData expects: {embedding_name: array, sample_labels: int_array}
-    npz_path = os.path.join(out_dir, "klein_train.npz")
+    dataset_name = getattr(args, "dataset_name", None) or "klein_train"
+    npz_path = os.path.join(out_dir, f"{dataset_name}.npz")
     np.savez(
         npz_path,
         **{obsm_key: train_emb.astype(np.float32)},

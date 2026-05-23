@@ -2,37 +2,23 @@
 PRESCIENT Data Preparation Script
 ==================================
 Converts an h5ad file into a PRESCIENT-ready data.pt file:
-  1. Splits train (Well != 2) / test (Well == 2)
-<<<<<<< HEAD
-  2. Exports train expression + metadata CSVs
-  3. Calls PRESCIENT process_data (as Python import, not subprocess)
-  4. Replaces data['xp'] with user-specified obsm embeddings
-  5. Saves test cell embeddings / timepoints / cell types for evaluation
-
-Usage
------
-=======
-  2. (Optional) Computes growth weights from scratch via prescient.utils
+  1. Splits train / test using `--well_col` (string-aware via `--test_values`).
+  2. (Optional) Computes growth weights from scratch via prescient.utils.
   3. Exports train expression + metadata CSVs
   4. Calls PRESCIENT process_data (as Python import, not subprocess)
   5. Replaces data['xp'] with user-specified obsm embeddings
-  6. Saves test cell embeddings / timepoints / cell types for evaluation
+  6. Remaps y/tps to 0-based indices (PRESCIENT trainer uses them as list indices)
+  7. Saves test cell embeddings / timepoints / cell types for evaluation
 
 Usage
 -----
 # With pre-computed growth weights:
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 python scripts/prescient/01_prepare_data.py \
     --data_path data/klein_subset.h5ad \
     --growth_path Explore_Notebook/8.Benchmark_v/Msig_GOBP_cellcycle_growth.pt \
     --obsm_key X_pca --n_dims 30 \
     --run_name pca_run
 
-<<<<<<< HEAD
-python scripts/prescient/01_prepare_data.py \
-    --data_path data/klein_subset.h5ad \
-    --growth_path Explore_Notebook/8.Benchmark_v/Msig_GOBP_cellcycle_growth.pt \
-=======
 # Compute growth weights from scratch (uses default gene sets):
 python scripts/prescient/01_prepare_data.py \
     --data_path data/klein/klein_addpop.h5ad \
@@ -45,9 +31,16 @@ python scripts/prescient/01_prepare_data.py \
     --data_path data/klein/klein_addpop.h5ad \
     --birth_gst data/mouse_geneset/mouse_hallmark_g2m.csv \
     --death_gst data/mouse_geneset/mouse_hallmark_apoptosis.csv \
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     --obsm_key DM_EigenVectors --n_dims 10 \
     --run_name dm_run
+
+# Cord blood (string-valued split column):
+python scripts/prescient/01_prepare_data.py \
+    --data_path data/cordblood_addpop.h5ad \
+    --obsm_key X_pca_scaled --n_dims 30 \
+    --well_col split --test_values test \
+    --tp_col timepoint_tx_days --celltype_col def_lab \
+    --run_name cordblood_pca_scaled_run
 """
 
 import os
@@ -71,8 +64,6 @@ def _patched_torch_load(f, *args, **kwargs):
     return _original_torch_load(f, *args, **kwargs)
 torch.load = _patched_torch_load
 
-<<<<<<< HEAD
-=======
 # PRESCIENT's process_data uses torch.save with the default pickle protocol (2),
 # which cannot serialize objects larger than 4 GiB.  Force protocol 4+.
 _original_torch_save = torch.save
@@ -81,7 +72,6 @@ def _patched_torch_save(obj, f, *args, **kwargs):
     return _original_torch_save(obj, f, *args, **kwargs)
 torch.save = _patched_torch_save
 
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
@@ -93,14 +83,19 @@ def parse_args():
     p.add_argument("--data_path", required=True, help="Path to input .h5ad file")
     p.add_argument(
         "--growth_path",
-<<<<<<< HEAD
-        required=True,
-        help="Path to pre-computed growth weights .pt file",
-=======
         default=None,
         help="Path to pre-computed growth weights .pt file. "
-             "If not provided, growth weights are computed from scratch "
-             "using --birth_gst and --death_gst gene sets.",
+             "If not provided, --growth_mode controls what to do.",
+    )
+    p.add_argument(
+        "--growth_mode",
+        default="auto",
+        choices=["auto", "uniform"],
+        help="When --growth_path is not supplied: 'auto' computes growth "
+             "weights from --birth_gst / --death_gst gene sets (Klein default, "
+             "needs species-matching gene sets); 'uniform' uses all-1.0 weights "
+             "(no proliferation bias — required for cord blood where mouse gene "
+             "sets don't match the human genes, otherwise growth weights are NaN).",
     )
     p.add_argument(
         "--birth_gst",
@@ -113,7 +108,6 @@ def parse_args():
         default="data/mouse_geneset/mouse_hallmark_apoptosis.csv",
         help="Path to death (apoptosis) gene set CSV for growth weight "
              "computation (default: data/mouse_geneset/mouse_hallmark_apoptosis.csv)",
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     )
     p.add_argument(
         "--output_dir",
@@ -128,16 +122,15 @@ def parse_args():
     p.add_argument(
         "--obsm_key",
         default="X_pca",
-<<<<<<< HEAD
-        choices=["X_pca", "DM_EigenVectors"],
-        help="obsm key to use as cell embedding (default: X_pca)",
-=======
-        choices=["X_pca", "X_pca_scaled", "DM_EigenVectors", "DM_EigenVectors_scaled"],
+        choices=[
+            "X_pca", "X_pca_scaled",
+            "X_pca_harmony", "X_pca_harmony_scaled",
+            "DM_EigenVectors", "DM_EigenVectors_scaled",
+        ],
         help="obsm key to use as cell embedding (default: X_pca). For DM, use "
              "'DM_EigenVectors_scaled' so the SDE noise scale matches the data; "
              "the raw 'DM_EigenVectors' has std≈0.0025 which is drowned by "
              "train_sd=0.5.",
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     )
     p.add_argument(
         "--n_dims",
@@ -153,7 +146,17 @@ def parse_args():
     p.add_argument(
         "--well_col",
         default="Well",
-        help="Well column for train/test split (default: Well)",
+        help="Column used to define train/test split (default: Well). "
+             "For cord blood, pass 'split'.",
+    )
+    p.add_argument(
+        "--test_values",
+        nargs="+",
+        default=["2"],
+        help="Values in --well_col that mark the held-out test set. "
+             "Comparison is done after .astype(str) so both ints and strings "
+             "work. Default ['2'] reproduces the legacy Klein behaviour "
+             "(Well == 2). For cord blood use 'test'.",
     )
     p.add_argument(
         "--celltype_col",
@@ -169,8 +172,6 @@ def parse_args():
     return p.parse_args()
 
 
-<<<<<<< HEAD
-=======
 def compute_growth_weights(adata_train, tp_col, birth_gst, death_gst, outfile):
     """
     Compute PRESCIENT growth weights from train cells using prescient.utils.
@@ -221,7 +222,6 @@ def compute_growth_weights(adata_train, tp_col, birth_gst, death_gst, outfile):
     return outfile
 
 
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
 def run_prescient_process_data(expr_csv, meta_csv, growth_path, out_dir, tp_col, celltype_col, num_pcs):
     """
     Call PRESCIENT's process_data as a Python function (not subprocess).
@@ -230,14 +230,11 @@ def run_prescient_process_data(expr_csv, meta_csv, growth_path, out_dir, tp_col,
     from argparse import Namespace
     from prescient.commands.process_data import main as prescient_process_data
 
-<<<<<<< HEAD
-=======
     # PRESCIENT uses string concatenation (out_dir + "data.pt") not os.path.join,
     # so out_dir MUST end with a path separator.
     if not out_dir.endswith(os.sep):
         out_dir = out_dir + os.sep
 
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     prescient_args = Namespace(
         data_path=expr_csv,
         meta_path=meta_csv,
@@ -269,37 +266,61 @@ def main():
     adata = sc.read_h5ad(args.data_path)
     log.info(f"  Total cells: {adata.n_obs}  genes: {adata.n_vars}")
 
-    # ------------------------------------------------------------------ split
+    # ------------------------------------------------------------------ split (string-aware)
     if args.well_col not in adata.obs.columns:
         raise ValueError(
             f"Column '{args.well_col}' not found in adata.obs. "
             f"Available: {list(adata.obs.columns)}"
         )
-    train_mask = adata.obs[args.well_col] != 2
-    test_mask = adata.obs[args.well_col] == 2
+    test_set = {str(v) for v in args.test_values}
+    well_str = adata.obs[args.well_col].astype(str)
+    test_mask = well_str.isin(test_set).values
+    train_mask = ~test_mask
+    log.info(
+        f"  test_values={sorted(test_set)} (matched against str(obs['{args.well_col}']))"
+    )
+    if not test_mask.any():
+        raise ValueError(
+            f"No cells matched test_values={sorted(test_set)} in column "
+            f"'{args.well_col}'. Unique values in column: "
+            f"{sorted(well_str.unique().tolist())[:10]}..."
+        )
     adata_train = adata[train_mask]
     adata_test = adata[test_mask]
     log.info(
         f"  Train cells: {train_mask.sum()}  Test cells: {test_mask.sum()}"
     )
 
-<<<<<<< HEAD
-=======
     # ------------------------------------------------------------------ growth weights
     growth_path = args.growth_path
     if growth_path is None:
         growth_path = os.path.join(out_dir, "growth_weights.pt")
-        compute_growth_weights(
-            adata_train=adata_train,
-            tp_col=args.tp_col,
-            birth_gst=args.birth_gst,
-            death_gst=args.death_gst,
-            outfile=growth_path,
-        )
+        if args.growth_mode == "uniform":
+            # Build uniform per-timepoint weights (all 1.0). Used for datasets
+            # where the gene sets don't match the species (e.g. cord blood
+            # human vs mouse gene sets → NaN growth otherwise).
+            tp_values = sorted(adata_train.obs[args.tp_col].unique())
+            n_per_tp = [
+                int((adata_train.obs[args.tp_col] == tp).sum())
+                for tp in tp_values
+            ]
+            w_list = [np.ones(n, dtype=np.float64) for n in n_per_tp]
+            torch.save({"w": w_list}, growth_path, pickle_protocol=4)
+            log.info(
+                f"Built UNIFORM growth weights: tp counts {dict(zip(tp_values, n_per_tp))}"
+                f" → {growth_path}"
+            )
+        else:
+            compute_growth_weights(
+                adata_train=adata_train,
+                tp_col=args.tp_col,
+                birth_gst=args.birth_gst,
+                death_gst=args.death_gst,
+                outfile=growth_path,
+            )
     else:
         log.info(f"Using pre-computed growth weights: {growth_path}")
 
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     # ------------------------------------------------------------------ export CSVs
     expr_csv = os.path.join(out_dir, "train_expr.csv")
     meta_csv = os.path.join(out_dir, "train_meta.csv")
@@ -321,11 +342,7 @@ def main():
     run_prescient_process_data(
         expr_csv=expr_csv,
         meta_csv=meta_csv,
-<<<<<<< HEAD
-        growth_path=args.growth_path,
-=======
         growth_path=growth_path,
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
         out_dir=out_dir,
         tp_col=args.tp_col,
         celltype_col=args.celltype_col,
@@ -376,8 +393,6 @@ def main():
         log.info(f"    tp={tp}: {emb.shape}")
 
     data["xp"] = new_xp
-<<<<<<< HEAD
-=======
 
     # ------------------------------------------------------------------ remap y/tps to 0-based indices
     # PRESCIENT's training code uses y values as list indices (e.g. x[config.train_t[-1]]),
@@ -394,7 +409,6 @@ def main():
     data["tps"] = tps_new
     log.info(f"  Remapped tps: unique {np.unique(tps_orig)} → {np.unique(tps_new)}")
 
->>>>>>> 2aa9d37e47e91f4f63e97a52f86f641c79576dd5
     torch.save(data, data_pt_path)
     log.info(f"Saved modified data.pt → {data_pt_path}")
     log.info(f"  xp shapes: {[x.shape for x in data['xp']]}")

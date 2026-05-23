@@ -1,0 +1,7 @@
+task_id	method	embedding	outdir
+0	mioflow	X_pca_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/mioflow/X_pca_scaled
+1	mioflow	DM_EigenVectors_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/mioflow/DM_EigenVectors_scaled
+2	tigon	X_pca_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/tigon/X_pca_scaled
+3	tigon	DM_EigenVectors_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/tigon/DM_EigenVectors_scaled
+4	trajectorynet	X_pca_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/trajectorynet/X_pca_scaled
+5	trajectorynet	DM_EigenVectors_scaled	/rds/user/wz369/hpc-work/PINN_dynamics/logs/cordblood/trajectorynet/DM_EigenVectors_scaled

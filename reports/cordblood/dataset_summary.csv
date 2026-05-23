@@ -1,0 +1,12 @@
+key,value
+n_obs,24885
+n_vars,3462
+timepoints,"[3, 10, 17]"
+n_clones (unique),3247
+cell types (def_lab),"['DC', 'DC precursor', 'Early Erythroid', 'HSC/MPP 1', 'HSC/MPP 2', 'Late Erythroid', 'MEMP', 'Mast cell', 'Mid Erythroid', 'Mono precur', 'Monocyte', 'NMP']"
+train cells,10053
+val cells,858
+test cells,1011
+X_pca_scaled shape,"(24885, 30)"
+DM_EigenVectors_scaled shape,"(24885, 9)"
+pca_scaler n_train_cells,10053

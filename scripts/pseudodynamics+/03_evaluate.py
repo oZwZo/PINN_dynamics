@@ -54,7 +54,10 @@ def parse_args():
     p.add_argument("--t_end_fate", type=float, default=4.0,
                    help="Normalised end time for fate eval: 0 -> t_end_fate")
     p.add_argument("--t_end_w2", type=float, default=4.0,
-                   help="Normalised end time for W2 eval: 2 -> t_end_w2")
+                   help="Normalised end time for W2 eval: t_start_w2 -> t_end_w2")
+    p.add_argument("--t_start_w2", type=float, default=2.0,
+                   help="Normalised start time for W2 eval (default 2.0, Klein "
+                        "convention = penultimate-tp). Cordblood 'min_minus' = 7.0.")
     p.add_argument("--n_steps", type=int, default=200,
                    help="Euler-Maruyama discretisation steps (SDE/SB)")
     p.add_argument("--noise_scale", type=float, default=1.0,
@@ -141,12 +144,23 @@ def main():
     y_ref = adata_train.obs[args.celltype_col].values.astype(str)
 
     # ── Prepare W2 eval data ──
+    # W2 source = test cells at the middle timepoint, target = test cells at the
+    # last timepoint. Derive both from the actual timepoint axis so cord blood
+    # (3 / 10 / 17) and Klein (2 / 4 / 6) work without hardcoding.
     test_ad = adata[adata.obs.Well == 2]
     w2_clone_mask = test_ad.obs.clones.isin(clone_proportions.index)
     w2_test_ad = test_ad[w2_clone_mask].copy()
+    tp_values_w2 = sorted(w2_test_ad.obs.timepoint_tx_days.unique())
+    if len(tp_values_w2) < 2:
+        raise ValueError(
+            f"W2 needs ≥2 distinct timepoints in test set; got {tp_values_w2}"
+        )
+    tp_mid = tp_values_w2[-2] if len(tp_values_w2) >= 3 else tp_values_w2[0]
+    tp_last_w2 = tp_values_w2[-1]
+    log.info(f"W2 timepoints: src={tp_mid}, tgt={tp_last_w2}  (full test tp axis: {tp_values_w2})")
 
-    src_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 4]
-    tgt_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == 6]
+    src_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == tp_mid]
+    tgt_ad_w2 = w2_test_ad[w2_test_ad.obs.timepoint_tx_days == tp_last_w2]
 
     src_cells_w2 = src_ad_w2.obsm[cellstate_key][:, :n_dims].astype(np.float32)
     tgt_cells_w2 = tgt_ad_w2.obsm[cellstate_key][:, :n_dims].astype(np.float32)
@@ -154,7 +168,7 @@ def main():
     tgt_clones_w2 = tgt_ad_w2.obs.clones.values
 
     log.info(f"Fate start cells: {len(start_cells_fate)}")
-    log.info(f"W2 src cells (t4): {len(src_cells_w2)}, tgt cells (t6): {len(tgt_cells_w2)}")
+    log.info(f"W2 src cells (t={tp_mid}): {len(src_cells_w2)}, tgt cells (t={tp_last_w2}): {len(tgt_cells_w2)}")
 
     # ── Evaluate each mode ──
     combined_rows = []
@@ -187,7 +201,7 @@ def main():
         fate_result['F_hat'].to_csv(os.path.join(output_dir, f"F_hat_{mode}.csv"))
 
         # ── Population W2 ──
-        sim_fn_w2 = build_sim_fn(mode, 2.0, args.t_end_w2,
+        sim_fn_w2 = build_sim_fn(mode, args.t_start_w2, args.t_end_w2,
                                  args.n_steps, args.noise_scale)
         w2_result = fate_eval.compute_w2_population(
             src_cells=src_cells_w2,

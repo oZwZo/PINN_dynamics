@@ -1,0 +1,98 @@
+{
+    "run_date": "2026-03-06 18:51:21",
+    "experiment_config": {
+        "dataset": "klein_addpop",
+        "gpu_devices": "0",
+        "progress_bar": "True",
+        "save_dir": "/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm10_lgNone/pde_params_tsense",
+        "version": 0,
+        "checkpoint_dir": "/rds/user/wz369/hpc-work/pseudodynamics_plus/logs/klein_PC30_lD1_cfm10_lgNone/pde_params_tsense/lightning_logs/version_0"
+    },
+    "dataset_config": {
+        "cellstate_key": "X_pca_scaled",
+        "n_dimension": 30,
+        "kde_kws": {
+            "bw_method": null
+        },
+        "timepoint_idx": [
+            0,
+            1,
+            2
+        ],
+        "deltax_key": "delta_PC",
+        "norm_time": "min_minus",
+        "knn_volume": "False"
+    },
+    "model_config": {
+        "model_class": "pde_params",
+        "channels": null,
+        "activation_fn": null,
+        "ode_tol": 0.0001,
+        "growth_weight": 0,
+        "R_weight": 1,
+        "D_penalty": 1,
+        "deltax_weight": 0,
+        "weight_intensity": 3,
+        "time_scale_factor": 1.0,
+        "time_sensitive": true,
+        "v_channels": [
+            31,
+            256,
+            256,
+            30
+        ],
+        "g_channels": [
+            31,
+            256,
+            256,
+            1
+        ],
+        "D_channels": [
+            31,
+            256,
+            256,
+            1
+        ]
+    },
+    "training_config": {
+        "batch_size": 512,
+        "schedule_lr": "CyclicLR",
+        "lr": 0.0003,
+        "max_epochs": 300,
+        "optimizer": "Adam"
+    },
+    "raw_args": {
+        "config": "logs/klein_PC30_lD1_cfm10_lgNone/cfm10_design.json",
+        "dataset": "klein_addpop",
+        "cellstate_key": "X_pca_scaled",
+        "model": "pde_params",
+        "pretrained": null,
+        "gpu_devices": "0",
+        "log_name": "klein_PC30_lD1_cfm10_lgNone",
+        "lr": 0.0003,
+        "schedule_lr": "CyclicLR",
+        "n_grid": 300,
+        "n_dimension": 30,
+        "timepoint_idx": [
+            0,
+            1,
+            2
+        ],
+        "knn_volume": "False",
+        "batch_size": 512,
+        "bw": null,
+        "tol": 0.0001,
+        "channels": "256,256",
+        "D_penalty": 1,
+        "deltax_key": "delta_PC",
+        "deltax_weight": 0,
+        "cfm_weight": 10,
+        "weight_intensity": 3,
+        "time_scale_factor": 1.0,
+        "norm_time": "min_minus",
+        "time_sensitive": true,
+        "progress_bar": "True",
+        "growth_weight": null,
+        "R_weight": null
+    }
+}

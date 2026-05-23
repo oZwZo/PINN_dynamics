@@ -53,7 +53,15 @@ def parse_args():
     p.add_argument("--tp_col", default="timepoint_tx_days",
                    help="Timepoint column in adata.obs (default: timepoint_tx_days)")
     p.add_argument("--well_col", default="Well",
-                   help="Well column for train/test split (default: Well)")
+                   help="Column used for train/test split (default: Well). "
+                        "For cord blood, pass 'split'.")
+    p.add_argument("--test_values", nargs="+", default=["2"],
+                   help="Values of --well_col that mark held-out test cells "
+                        "(string-compared after .astype(str)). Default ['2'] "
+                        "reproduces Klein behaviour; for cord blood pass 'test'.")
+    p.add_argument("--dataset_name", default="klein_train",
+                   help="Output npy stem (default 'klein_train'). TIGON 02_train.py "
+                        "loads <input_dir>/<dataset>.npy where dataset = --dataset arg.")
     p.add_argument("--celltype_col", default="Annotation",
                    help="Cell-type annotation column (default: Annotation)")
     p.add_argument("--subsample", type=int, default=2000,
@@ -107,8 +115,16 @@ def main():
         raise ValueError(
             f"Column '{args.well_col}' not found. Available: {list(adata.obs.columns)}"
         )
-    train_mask = adata.obs[args.well_col] != 2
-    test_mask = adata.obs[args.well_col] == 2
+    test_set = {str(v) for v in args.test_values}
+    well_str = adata.obs[args.well_col].astype(str)
+    test_mask = well_str.isin(test_set).values
+    train_mask = ~test_mask
+    if not test_mask.any():
+        raise ValueError(
+            f"No cells matched test_values={sorted(test_set)} in column "
+            f"'{args.well_col}'. Unique values seen: "
+            f"{sorted(well_str.unique().tolist())[:10]}..."
+        )
     adata_train = adata[train_mask].copy()
     adata_test = adata[test_mask].copy()
     log.info(f"  Train cells: {adata_train.n_obs}  Test cells: {adata_test.n_obs}")
@@ -189,7 +205,10 @@ def main():
     for i in range(n_tp):
         data[0, i] = data_arrays[i]
 
-    npy_path = os.path.join(out_dir, "klein_train.npy")
+    # Filename derives from --dataset_name (default 'klein_train' for backwards
+    # compat); cord blood passes --dataset_name cordblood so TIGON 02_train can find it.
+    dataset_name = getattr(args, "dataset_name", None) or "klein_train"
+    npy_path = os.path.join(out_dir, f"{dataset_name}.npy")
     np.save(npy_path, data)
     log.info(f"  Saved TIGON data -> {npy_path}")
     for i in range(n_tp):
